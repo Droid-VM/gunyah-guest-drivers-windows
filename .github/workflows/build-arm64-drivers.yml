@@ -1,0 +1,221 @@
+name: Build DroidVM ARM64 drivers
+
+# 可手動觸發，或被其他 workflow 重用（dev-release.yml 會 call 它）。
+# push 觸發移到 dev-release.yml，避免一次 push 重複建置兩次。
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  CONFIG: "Win11 Release"
+  PLATFORM: "ARM64"
+  OSMASK: "Server10_ARM64"          # 與 build/Driver.PackOne.targets 一致（Win11/ARM64）
+  CERT_SUBJECT: "CN=DroidVM Test"
+  PFX_PW: "droidvm"
+
+jobs:
+  build:
+    # windows-2022 內建 WDK 22H2 + VS2022，可直接 msbuild（vs2026 runner 沒有 WDK 本體）。
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      # 診斷：列出可用的 Driver 平台工具集 / WDK，方便 build 失敗時定位
+      - name: Diagnose toolchain
+        shell: pwsh
+        run: |
+          Write-Host "=== VS instances ==="
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format json | Out-String | Write-Host
+          Write-Host "=== Windows Kits bin ==="
+          Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -ErrorAction SilentlyContinue | Select Name
+          Write-Host "=== Driver platform toolset present? ==="
+          Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\*\*\MSBuild\Microsoft\VC\*\Platforms\ARM64\PlatformToolsets" -ErrorAction SilentlyContinue |
+            Select-Object FullName
+
+      - name: Install CPDK (Cryptographic Provider Dev Kit, for viorng's CNG provider)
+        shell: pwsh
+        run: |
+          $hdr = 'C:\Program Files (x86)\Windows Kits\10\Cryptographic Provider Development Kit\Include\bcrypt_provider.h'
+          # 主：choco 套件
+          choco install windows-cryptographic-provider-development-kit -y --no-progress 2>&1 | Out-Host
+          if (-not (Test-Path $hdr)) {
+            # 備援：直接下載官方 cpdksetup.exe 靜默安裝
+            Write-Host "choco 未到位，改用 cpdksetup.exe"
+            $url='https://download.microsoft.com/download/1/7/6/176909B0-50F2-4DF3-B29B-830A17EA7E38/CPDK_RELEASE_UPDATE/cpdksetup.exe'
+            Invoke-WebRequest -Uri $url -OutFile cpdksetup.exe
+            Start-Process -FilePath .\cpdksetup.exe -ArgumentList '/q','/norestart' -Wait
+          }
+          if (Test-Path $hdr) { Write-Host "CPDK OK: $hdr" }
+          else { Write-Host "::warning::bcrypt_provider.h 仍找不到，viorng 可能建不起來" }
+
+      - name: Build ARM64 drivers
+        shell: pwsh
+        run: |
+          # 逐 vcxproj 建，先按相依順序建 deps（msbuild sln /t:proj 不可靠，會把名稱當 target）：
+          #   Mof(產 netkvmmof.h) -> VirtioLib / VirtioLib-WDF -> CoInstaller -> 各驅動 -> rdmapool
+          $common = @('/m','/p:ApiValidator_Enable=false','/p:SpectreMitigation=false','/p:SignMode=Off')
+          $jobs = @(
+            @{ p='NetKVM/Mof/Mof.vcxproj';                  c='Header';        plat='x64'   ; dep=$true },
+            @{ p='VirtIO/VirtioLib.vcxproj';                c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='VirtIO/WDF/VirtioLib-WDF.vcxproj';        c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='NetKVM/CoInstaller/netkvmco-vs2015.vcxproj'; c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='viosock/lib/viosocklib.vcxproj';          c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='viosock/wspsvc/viosockwspsvc.vcxproj';    c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='NetKVM/ProtocolService/ProtocolService.vcxproj'; c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='viorng/cng/um/viorngum.vcxproj';          c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='vioinput/hidpassthrough/hidpassthrough.vcxproj'; c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='vioinput/sys/vioinput.vcxproj';           c='Win11 Release'; plat='ARM64' },
+            @{ p='viostor/viostor.vcxproj';                 c='Win11 Release'; plat='ARM64' },
+            @{ p='vioscsi/vioscsi.vcxproj';                 c='Win11 Release'; plat='ARM64' },
+            @{ p='vioserial/sys/vioser.vcxproj';            c='Win11 Release'; plat='ARM64' },
+            @{ p='viorng/viorng/viorng.vcxproj';            c='Win11 Release'; plat='ARM64' },
+            @{ p='viosock/sys/viosock.vcxproj';             c='Win11 Release'; plat='ARM64' },
+            @{ p='NetKVM/NetKVM-VS2015.vcxproj';            c='Win11 Release'; plat='ARM64' },
+            @{ p='rdmapool/rdmapool.vcxproj';               c='Release';       plat='ARM64' }
+          )
+          $failed = @()
+          foreach ($j in $jobs) {
+            Write-Host "::group::build $($j.p) [$($j.c)|$($j.plat)]"
+            msbuild $j.p /p:Configuration="$($j.c)" /p:Platform="$($j.plat)" @common
+            if ($LASTEXITCODE -ne 0) {
+              $failed += $j.p
+              if ($j.dep) { Write-Host "::error::dependency $($j.p) failed — 後續驅動可能連不到" }
+            }
+            Write-Host "::endgroup::"
+          }
+          if ($failed.Count) { Write-Host "::warning::Failed: $($failed -join ', ')" }
+          # 不中止 job；簽署/打包會處理已成功的部分
+
+      - name: Sign + package
+        shell: pwsh
+        env:
+          # 固定簽章憑證（建議）：把 .pfx 的 base64 放進此 secret，每次 run 都用同一張憑證
+          # 簽，跨 build 一致。未設定時退回每次新生的自簽憑證（跨 run 憑證會不同）。
+          PFX_B64: ${{ secrets.DROIDVM_PFX_BASE64 }}
+          # pfx 密碼 secret（可選）；未設定就用 env:PFX_PW 預設值
+          PFX_PW_SECRET: ${{ secrets.DROIDVM_PFX_PW }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $kitbin = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\10.*" -Directory | Sort Name -Desc | Select -First 1).FullName
+          $signtool = Join-Path $kitbin 'x64\signtool.exe'
+          $inf2cat  = Join-Path $kitbin 'x86\inf2cat.exe'
+          $stampinf = Join-Path $kitbin 'x86\stampinf.exe'
+
+          New-Item -ItemType Directory -Force out | Out-Null
+          $pfx = "out\DroidVM_Test.pfx"
+          $pfxPw = if ($env:PFX_PW_SECRET) { $env:PFX_PW_SECRET } else { $env:PFX_PW }
+          $pw = ConvertTo-SecureString "$pfxPw" -AsPlainText -Force
+          if ($env:PFX_B64) {
+            # 固定憑證：從 secret 還原 pfx -> 每次 run 都同一張
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64))
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My `
+                      -Password $pw -Exportable
+            Export-Certificate -Cert $cert -FilePath "out\DroidVM_Test.cer" | Out-Null
+            Write-Host "[sign] 固定憑證 (secret DROIDVM_PFX_BASE64): $($cert.Subject) $($cert.Thumbprint)"
+          } else {
+            Write-Host "::warning::未設定 DROIDVM_PFX_BASE64 -> 改用每次新生的自簽憑證（驅動跨 run 會是不同金鑰的同名憑證）。設定固定 pfx secret 可統一。"
+            $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "$env:CERT_SUBJECT" `
+                      -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable `
+                      -KeyUsage DigitalSignature -NotAfter (Get-Date).AddYears(10)
+            Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pw | Out-Null
+            Export-Certificate   -Cert $cert -FilePath "out\DroidVM_Test.cer" | Out-Null
+          }
+
+          # 按 inf 需求，從 build 樹組裝每個 driver package（root, 需要的二進位, 對應 inf）
+          $drv = @(
+            @{ n='viostor';   root='viostor';   bins=@('viostor.sys');  inf='viostor.inf' },
+            @{ n='vioscsi';   root='vioscsi';   bins=@('vioscsi.sys');  inf='vioscsi.inf' },
+            @{ n='vioserial'; root='vioserial'; bins=@('vioser.sys');   inf='vioser.inf' },
+            @{ n='viorng';    root='viorng';    bins=@('viorng.sys','viorngum.dll'); inf='viorng.inf' },
+            @{ n='viosock';   root='viosock';   bins=@('viosock.sys','viosocklib.dll','viosockwspsvc.exe'); inf='viosock.inf' },
+            @{ n='NetKVM';    root='NetKVM';    bins=@('netkvm.sys','netkvmp.exe'); inf='netkvm.inf' },
+            @{ n='vioinput';  root='vioinput';  bins=@('vioinput.sys','viohidkmdf.sys'); inf='vioinput.inf' },
+            @{ n='rdmapool';  root='rdmapool';  bins=@('rdmapool.sys'); inf='rdmapool.inf' }
+          )
+          # 在 root 下找最佳檔案：優先路徑含 ARM64、最新修改
+          function Pick($root,$file) {
+            Get-ChildItem $root -Recurse -Filter $file -File -EA SilentlyContinue |
+              Where-Object { $_.FullName -match 'ARM64|arm64' } |
+              Sort-Object LastWriteTime -Desc | Select-Object -First 1
+          }
+          # inf：優先 ARM64 已 stamp -> 任何 .inf -> source .inx（後面 stampinf 補 token）
+          function PickInf($root,$file) {
+            $f = Pick $root $file
+            if ($f) { return $f }
+            $f = Get-ChildItem $root -Recurse -Filter $file -File -EA SilentlyContinue |
+              Sort-Object LastWriteTime -Desc | Select-Object -First 1
+            if ($f) { return $f }
+            $inx = [IO.Path]::ChangeExtension($file,'.inx')
+            Get-ChildItem $root -Recurse -Filter $inx -File -EA SilentlyContinue |
+              Sort-Object LastWriteTime -Desc | Select-Object -First 1
+          }
+          foreach ($d in $drv) {
+            $dest = "out\drivers\$($d.n)"; New-Item -ItemType Directory -Force $dest | Out-Null
+            $ok = $true
+            foreach ($b in $d.bins) {
+              $f = Pick $d.root $b
+              if ($f) { Copy-Item $f.FullName $dest -Force } else { Write-Host "::warning::$($d.n): 缺 $b"; $ok=$false }
+            }
+            # 取 inf（優先 ARM64 已 stamp；否則 source 模板）
+            $infF = PickInf $d.root $d.inf
+            if ($infF) { Copy-Item $infF.FullName (Join-Path $dest $d.inf) -Force } else { Write-Host "::warning::$($d.n): 缺 $($d.inf)"; $ok=$false }
+            if (-not $ok) { Write-Host "::warning::$($d.n) 不完整，略過簽署"; continue }
+            $infPath = Join-Path $dest $d.inf
+            # 把 .inx 模板的 INX_* token 換掉。上游是用 package project（vioinput/package、
+            # VirtRNG Package）透過 build/Driver.*.props 的 <Substitution> 做；本 CI 只 build
+            # sys vcxproj，所以在 build script 補上 Win11/RHEL 對應值，保持上游 vcxproj/inx 不動。
+            # 已替換好的 inf（viostor 等）沒有 INX_ token，這裡會是 no-op。
+            $inxMap = [ordered]@{
+              '_INX_SUBSYS_VENDOR_ID'              = '1AF4'
+              'INX_PLATFORM_DRIVERS_DIR'           = '13'
+              'INX_BASE_ON_SYSTEM_ROOT_DRIVER_DIR' = '%13%'
+              'INX_NETKVM_DMAREMAP'                = '2'
+              'INX_NETKVM_SEPARATE_TAIL'           = '1'
+              'INX_COMPANY'                        = 'Red Hat, Inc.'
+              'INX_PREFIX_VENDOR'                  = 'Red Hat '
+              'INX_PREFIX_VIRTIO'                  = ''
+              'INX_PREFIX_QEMU'                    = ''
+              'INX_COPYRIGHT_1'                    = 'Copyright (c) Red Hat Inc.'
+              'INX_COPYRIGHT_2'                    = ''
+            }
+            $raw = Get-Content $infPath -Raw
+            foreach ($k in $inxMap.Keys) { $raw = $raw.Replace($k, [string]$inxMap[$k]) }
+            Set-Content -LiteralPath $infPath -Value $raw -NoNewline -Encoding utf8
+            # 若 inf 仍有 stampinf token，補做 stampinf（$ARCH$ -> ARM64, $KMDFVERSION$ -> 1.15）
+            if ((Get-Content $infPath -Raw) -match '\$ARCH\$|\$KMDFVERSION\$') {
+              & $stampinf -f $infPath -a ARM64 -k 1.15 -d "*" -v "*"
+              Write-Host "stampinf -> $($d.n)"
+            }
+            # 防呆：替換後仍殘留 INX_* token（代表上面 $inxMap 漏了 token）-> 擋下不簽、build 失敗，
+            # 避免再次靜默出貨壞掉的 inf（ServiceBinary 路徑會是壞的、驅動裝不起來）。
+            if ((Get-Content $infPath -Raw) -match 'INX_[A-Z_]+') {
+              Write-Host "::error::$($d.n): $($d.inf) 替換後仍殘留 INX_* token，請補進 build script 的 inxMap。略過簽署。"
+              $infBroken = $true
+              continue
+            }
+            # 簽所有 PE
+            Get-ChildItem "$dest\*" -Include *.sys,*.dll,*.exe -EA SilentlyContinue |
+              ForEach-Object { & $signtool sign /fd SHA256 /f $pfx /p "$pfxPw" $_.FullName }
+            # 產 cat + 簽
+            & $inf2cat /driver:$dest /os:$env:OSMASK
+            Get-ChildItem "$dest\*.cat" -EA SilentlyContinue |
+              ForEach-Object { & $signtool sign /fd SHA256 /f $pfx /p "$pfxPw" $_.FullName }
+            $has = (Get-ChildItem "$dest" | ForEach-Object Name) -join ' '
+            Write-Host "packed $($d.n): $has"
+          }
+          Remove-Item $pfx -Force   # 不上傳私鑰
+          Write-Host "=== staged ==="; Get-ChildItem -Recurse out -File | Select FullName
+          # 若有任何 driver 的 inf 殘留 INX_* token，明確讓 build 失敗（避免再次靜默出貨壞包）
+          if ($infBroken) { Write-Host "::error::有 driver 的 inf 殘留未替換 INX_* token，build 失敗"; exit 1 }
+
+      - name: Upload drivers artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: droidvm-arm64-drivers
+          path: out/**
+          if-no-files-found: warn

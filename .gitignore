@@ -24,6 +24,7 @@ vc*.pdb
 *VistaRelease*
 Win32
 x64
+image
 Install
 Install_Debug
 sdv
@@ -37,4 +38,11 @@ codeql.build.bat
 codeql_db
 *.sarif
 *CodeAnalysis.log
+other_build/
 vc.nativecodeanalysis.all.xml
+# cert/：只忽略憑證／私鑰材料；cert/README.md 與 cert/make-signing-cert.sh 仍追蹤
+# （*.pfx / *.cer 已在上方全域忽略，這裡補上其餘私鑰副檔名）
+cert/*.pfx.b64
+cert/*.key
+cert/*.cer.pem
+cert/*.pem

@@ -1,0 +1,66 @@
+name: Dev release
+
+# 每次 push 到 master（或手動觸發）就自動：
+#   1) 把該 commit 標記成 rolling dev tag
+#   2) 重用 build-arm64-drivers 編譯 + 簽署 + 打包，發佈成 dev prerelease
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+permissions:
+  contents: write          # 推 dev tag、發 release 需要
+
+concurrency:
+  group: dev-release       # 避免多個 push 同時搶 dev tag
+  cancel-in-progress: false
+
+jobs:
+  # 1) 重用既有的 ARM64 建置流程（build + sign + package + upload artifact）
+  #    secrets: inherit -> 把呼叫端的 secrets（DROIDVM_PFX_BASE64 等）傳進 reusable workflow，
+  #    否則被呼叫的 workflow 拿不到 secret，簽署會退回每次新生的自簽憑證。
+  build:
+    uses: ./.github/workflows/build-arm64-drivers.yml
+    secrets: inherit
+
+  # 2) 標記 dev tag + 發佈 dev prerelease（附上打包好的驅動 zip）
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download built drivers
+        uses: actions/download-artifact@v4
+        with:
+          name: droidvm-arm64-drivers
+          path: staging
+
+      - name: Zip drivers
+        run: |
+          set -e
+          if [ -z "$(ls -A staging 2>/dev/null)" ]; then
+            echo "::error::沒有抓到任何建置產物 (droidvm-arm64-drivers)"; exit 1
+          fi
+          ( cd staging && zip -r ../gunyah-arm64-drivers.zip . )
+          ls -l gunyah-arm64-drivers.zip
+
+      - name: Move dev tag + publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 把 rolling dev tag 強制移到這個 commit
+          git tag -f dev "$GITHUB_SHA"
+          git push -f origin dev
+          # 重發 dev prerelease（保留 tag，只換 release 內容與資產）
+          gh release delete dev --yes --cleanup-tag=false || true
+          gh release create dev gunyah-arm64-drivers.zip \
+            --prerelease \
+            --title "dev — ${GITHUB_SHA::7}" \
+            --notes "Auto dev build of \`${GITHUB_SHA}\` ($(date -u +%FT%TZ)). 內含 ARM64 已簽署驅動 + DroidVM_Test.cer。"
