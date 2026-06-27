@@ -20,19 +20,20 @@
  *   Page 0: out_hdr (16B) + status (1B) + blk_discard[16] (256B) + sn (20B)
  *   Pages 1-3: indirect descriptor table (up to 515*16 = 8240B)
  */
-#define BOUNCE_CTL_PAGES            4
-#define BOUNCE_CTL_SIZE             (BOUNCE_CTL_PAGES * PAGE_SIZE)
+#define BOUNCE_CTL_PAGES           4
+#define BOUNCE_CTL_SIZE            (BOUNCE_CTL_PAGES * PAGE_SIZE)
 
 /* Offsets within a control slot (page 0) */
-#define BOUNCE_CTL_OUTHDR_OFFSET    0
-#define BOUNCE_CTL_STATUS_OFFSET    16   /* sizeof(blk_outhdr): u32 + u32 + u64 */
-#define BOUNCE_CTL_DISCARD_OFFSET   32
-#define BOUNCE_CTL_SN_OFFSET        288
+#define BOUNCE_CTL_OUTHDR_OFFSET   0
+#define BOUNCE_CTL_STATUS_OFFSET   16 /* sizeof(blk_outhdr): u32 + u32 + u64 */
+#define BOUNCE_CTL_DISCARD_OFFSET  32
+#define BOUNCE_CTL_SN_OFFSET       288
 
 /* Indirect descriptor table starts at page 1 */
-#define BOUNCE_CTL_INDIRECT_OFFSET  PAGE_SIZE
+#define BOUNCE_CTL_INDIRECT_OFFSET PAGE_SIZE
 
-typedef struct _BOUNCE_ALLOCATOR {
+typedef struct _BOUNCE_ALLOCATOR
+{
     PUCHAR BaseVA;
     PHYSICAL_ADDRESS BasePA;
     ULONG TotalPages;
@@ -57,13 +58,7 @@ typedef struct _BOUNCE_ALLOCATOR {
  * ctlSlotCount: number of control slots to pre-allocate (typically queue_depth).
  */
 NTSTATUS
-BounceInit(
-    PBOUNCE_ALLOCATOR Alloc,
-    PUCHAR BaseVA,
-    PHYSICAL_ADDRESS BasePA,
-    SIZE_T TotalSize,
-    ULONG CtlSlotCount
-    );
+BounceInit(PBOUNCE_ALLOCATOR Alloc, PUCHAR BaseVA, PHYSICAL_ADDRESS BasePA, SIZE_T TotalSize, ULONG CtlSlotCount);
 
 /* Allocate a control slot. Returns VA or NULL if exhausted. */
 PVOID BounceAllocCtl(PBOUNCE_ALLOCATOR Alloc);
@@ -100,17 +95,21 @@ BouncePAtoVA(PBOUNCE_ALLOCATOR Alloc, PHYSICAL_ADDRESS PA)
  * Safe to call even when bounceCtl is NULL (no-op).
  * Uses VIO_SG sg[] entries to find data page PAs.
  */
-#define BOUNCE_CLEANUP_SRB(pAdaptExt, pSrbExt) do {                                     \
-    if ((pSrbExt)->bounceCtl) {                                                          \
-        ULONG _bci;                                                                      \
-        for (_bci = 1; _bci <= (pSrbExt)->bounceDataPageCount; _bci++) {                 \
-            BounceFreeDataPage(&(pAdaptExt)->bounce,                                     \
-                BouncePAtoVA(&(pAdaptExt)->bounce, (pSrbExt)->sg[_bci].physAddr));        \
-        }                                                                                \
-        BounceFreeCtl(&(pAdaptExt)->bounce, (pSrbExt)->bounceCtl);                       \
-        (pSrbExt)->bounceCtl = NULL;                                                     \
-        (pSrbExt)->bounceDataPageCount = 0;                                              \
-    }                                                                                    \
-} while(0)
+#define BOUNCE_CLEANUP_SRB(pAdaptExt, pSrbExt)                                                                         \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if ((pSrbExt)->bounceCtl)                                                                                      \
+        {                                                                                                              \
+            ULONG _bci;                                                                                                \
+            for (_bci = 1; _bci <= (pSrbExt)->bounceDataPageCount; _bci++)                                             \
+            {                                                                                                          \
+                BounceFreeDataPage(&(pAdaptExt)->bounce,                                                               \
+                                   BouncePAtoVA(&(pAdaptExt)->bounce, (pSrbExt)->sg[_bci].physAddr));                  \
+            }                                                                                                          \
+            BounceFreeCtl(&(pAdaptExt)->bounce, (pSrbExt)->bounceCtl);                                                 \
+            (pSrbExt)->bounceCtl = NULL;                                                                               \
+            (pSrbExt)->bounceDataPageCount = 0;                                                                        \
+        }                                                                                                              \
+    } while (0)
 
 #endif /* _VIOSTOR_BOUNCE_H_ */

@@ -15,11 +15,12 @@
 /*
  * Device context for the rdmapool WDFDEVICE.
  */
-typedef struct _RDMAPOOL_DEVICE_CONTEXT {
-    PHYSICAL_ADDRESS    PoolPhysicalBase;
-    SIZE_T              PoolSize;
-    PVOID               PoolVirtualBase;
-    BOOLEAN             PoolInitialized;
+typedef struct _RDMAPOOL_DEVICE_CONTEXT
+{
+    PHYSICAL_ADDRESS PoolPhysicalBase;
+    SIZE_T PoolSize;
+    PVOID PoolVirtualBase;
+    BOOLEAN PoolInitialized;
 } RDMAPOOL_DEVICE_CONTEXT, *PRDMAPOOL_DEVICE_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(RDMAPOOL_DEVICE_CONTEXT, RdmaPoolGetDeviceContext)

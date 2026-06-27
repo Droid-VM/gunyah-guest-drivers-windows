@@ -745,15 +745,16 @@ VirtIoHwInitialize(IN PVOID DeviceExtension)
         bouncePA.QuadPart = adaptExt->rdmaPoolBasePA.QuadPart + adaptExt->pageOffset;
 
         RhelDbgPrint(TRACE_LEVEL_INFORMATION,
-            " Bounce region: VA=%p PA=0x%I64x Size=0x%Ix (after ring offset 0x%x)\n",
-            bounceBase, bouncePA.QuadPart, bounceSize, adaptExt->pageOffset);
+                     " Bounce region: VA=%p PA=0x%I64x Size=0x%Ix (after ring offset 0x%x)\n",
+                     bounceBase,
+                     bouncePA.QuadPart,
+                     bounceSize,
+                     adaptExt->pageOffset);
 
-        status = BounceInit(&adaptExt->bounce, bounceBase, bouncePA,
-                            bounceSize, adaptExt->queue_depth);
+        status = BounceInit(&adaptExt->bounce, bounceBase, bouncePA, bounceSize, adaptExt->queue_depth);
         if (!NT_SUCCESS(status))
         {
-            RhelDbgPrint(TRACE_LEVEL_ERROR,
-                " BounceInit failed 0x%x, disabling rdmapool bounce\n", status);
+            RhelDbgPrint(TRACE_LEVEL_ERROR, " BounceInit failed 0x%x, disabling rdmapool bounce\n", status);
             adaptExt->rdmaPoolActive = FALSE;
         }
     }
@@ -1674,12 +1675,10 @@ VirtIoBuildIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
         srbExt->bounceCtl = ctlSlot;
 
         /* Copy out_hdr to bounce control slot */
-        RtlCopyMemory((PUCHAR)ctlSlot + BOUNCE_CTL_OUTHDR_OFFSET,
-                       &srbExt->vbr.out_hdr, sizeof(srbExt->vbr.out_hdr));
+        RtlCopyMemory((PUCHAR)ctlSlot + BOUNCE_CTL_OUTHDR_OFFSET, &srbExt->vbr.out_hdr, sizeof(srbExt->vbr.out_hdr));
 
         /* Header SG → bounce */
-        srbExt->sg[0].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)ctlSlot + BOUNCE_CTL_OUTHDR_OFFSET);
+        srbExt->sg[0].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)ctlSlot + BOUNCE_CTL_OUTHDR_OFFSET);
         srbExt->sg[0].length = sizeof(srbExt->vbr.out_hdr);
 
         /* Get system VA for data buffer copy */
@@ -1698,7 +1697,7 @@ VirtIoBuildIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
         srbExt->originalDataVA = dataVA;
 
         /* Allocate bounce pages for data, splitting into PAGE_SIZE chunks */
-        for (dataOffset = 0; dataOffset < totalDataLen; )
+        for (dataOffset = 0; dataOffset < totalDataLen;)
         {
             PVOID bouncePage = BounceAllocDataPage(&adaptExt->bounce);
             ULONG chunkLen;
@@ -1708,8 +1707,7 @@ VirtIoBuildIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
                 /* Free previously allocated data pages */
                 for (j = 1; j <= dataPageCount; j++)
                 {
-                    BounceFreeDataPage(&adaptExt->bounce,
-                        BouncePAtoVA(&adaptExt->bounce, srbExt->sg[j].physAddr));
+                    BounceFreeDataPage(&adaptExt->bounce, BouncePAtoVA(&adaptExt->bounce, srbExt->sg[j].physAddr));
                 }
                 BounceFreeCtl(&adaptExt->bounce, ctlSlot);
                 srbExt->bounceCtl = NULL;
@@ -1733,20 +1731,19 @@ VirtIoBuildIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
         srbExt->bounceDataPageCount = dataPageCount;
 
         /* Status SG → bounce */
-        srbExt->sg[newSgIdx].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                                     (PUCHAR)ctlSlot + BOUNCE_CTL_STATUS_OFFSET);
+        srbExt->sg[newSgIdx].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)ctlSlot + BOUNCE_CTL_STATUS_OFFSET);
         srbExt->sg[newSgIdx].length = sizeof(srbExt->vbr.status);
 
         /* Update out/in counts to reflect bounce layout */
         if (isWrite)
         {
-            srbExt->out = newSgIdx;  /* hdr + data pages */
-            srbExt->in = 1;          /* status */
+            srbExt->out = newSgIdx; /* hdr + data pages */
+            srbExt->in = 1;         /* status */
         }
         else
         {
-            srbExt->out = 1;         /* hdr */
-            srbExt->in = newSgIdx;   /* data pages + status */
+            srbExt->out = 1;       /* hdr */
+            srbExt->in = newSgIdx; /* data pages + status */
         }
     }
     else
@@ -2412,9 +2409,7 @@ VOID VioStorCompleteRequest(IN PVOID DeviceExtension, IN ULONG MessageID, IN BOO
                 /* Bounce cleanup for GET_ID: copy sn and status from bounce slot */
                 if (srbExt->bounceCtl)
                 {
-                    RtlCopyMemory(adaptExt->sn,
-                                  (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_SN_OFFSET,
-                                  sizeof(adaptExt->sn));
+                    RtlCopyMemory(adaptExt->sn, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_SN_OFFSET, sizeof(adaptExt->sn));
                     srbExt->vbr.status = *((u8 *)((PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_STATUS_OFFSET));
                     BounceFreeCtl(&adaptExt->bounce, srbExt->bounceCtl);
                     srbExt->bounceCtl = NULL;
@@ -2468,8 +2463,7 @@ VOID VioStorCompleteRequest(IN PVOID DeviceExtension, IN ULONG MessageID, IN BOO
                     srbExt->vbr.status = *((u8 *)((PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_STATUS_OFFSET));
 
                     /* For reads: copy data from bounce pages back to original buffer */
-                    if (srbExt->vbr.out_hdr.type == VIRTIO_BLK_T_IN &&
-                        srbExt->originalDataVA != NULL &&
+                    if (srbExt->vbr.out_hdr.type == VIRTIO_BLK_T_IN && srbExt->originalDataVA != NULL &&
                         srbExt->bounceDataPageCount > 0)
                     {
                         SIZE_T offset = 0;
@@ -2477,8 +2471,7 @@ VOID VioStorCompleteRequest(IN PVOID DeviceExtension, IN ULONG MessageID, IN BOO
                         for (bIdx = 1; bIdx <= srbExt->bounceDataPageCount; bIdx++)
                         {
                             PVOID srcVA = BouncePAtoVA(&adaptExt->bounce, srbExt->sg[bIdx].physAddr);
-                            RtlCopyMemory((PUCHAR)srbExt->originalDataVA + offset,
-                                          srcVA, srbExt->sg[bIdx].length);
+                            RtlCopyMemory((PUCHAR)srbExt->originalDataVA + offset, srcVA, srbExt->sg[bIdx].length);
                             offset += srbExt->sg[bIdx].length;
                         }
                     }

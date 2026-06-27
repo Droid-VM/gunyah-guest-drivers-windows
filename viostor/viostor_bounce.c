@@ -13,13 +13,7 @@
 #endif
 
 NTSTATUS
-BounceInit(
-    PBOUNCE_ALLOCATOR Alloc,
-    PUCHAR BaseVA,
-    PHYSICAL_ADDRESS BasePA,
-    SIZE_T TotalSize,
-    ULONG CtlSlotCount
-    )
+BounceInit(PBOUNCE_ALLOCATOR Alloc, PUCHAR BaseVA, PHYSICAL_ADDRESS BasePA, SIZE_T TotalSize, ULONG CtlSlotCount)
 {
     ULONG ctlRegionSize;
     ULONG totalPages;
@@ -35,8 +29,9 @@ BounceInit(
     if (totalPages <= ctlRegionSize)
     {
         RhelDbgPrint(TRACE_LEVEL_ERROR,
-            " BounceInit: insufficient pages (%u) for %u control slots\n",
-            totalPages, CtlSlotCount);
+                     " BounceInit: insufficient pages (%u) for %u control slots\n",
+                     totalPages,
+                     CtlSlotCount);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -72,8 +67,11 @@ BounceInit(
     Alloc->Initialized = TRUE;
 
     RhelDbgPrint(TRACE_LEVEL_INFORMATION,
-        " BounceInit: %u ctl slots (%u pages), %u data pages, total %u pages\n",
-        CtlSlotCount, ctlRegionSize, dataPages, totalPages);
+                 " BounceInit: %u ctl slots (%u pages), %u data pages, total %u pages\n",
+                 CtlSlotCount,
+                 ctlRegionSize,
+                 dataPages,
+                 totalPages);
 
     return STATUS_SUCCESS;
 }
@@ -84,8 +82,7 @@ BounceAllocCtl(PBOUNCE_ALLOCATOR Alloc)
     return (PVOID)InterlockedPopEntrySList(&Alloc->CtlFreeList);
 }
 
-VOID
-BounceFreeCtl(PBOUNCE_ALLOCATOR Alloc, PVOID CtlVA)
+VOID BounceFreeCtl(PBOUNCE_ALLOCATOR Alloc, PVOID CtlVA)
 {
     InterlockedPushEntrySList(&Alloc->CtlFreeList, (PSLIST_ENTRY)CtlVA);
 }
@@ -96,8 +93,7 @@ BounceAllocDataPage(PBOUNCE_ALLOCATOR Alloc)
     return (PVOID)InterlockedPopEntrySList(&Alloc->DataFreeList);
 }
 
-VOID
-BounceFreeDataPage(PBOUNCE_ALLOCATOR Alloc, PVOID PageVA)
+VOID BounceFreeDataPage(PBOUNCE_ALLOCATOR Alloc, PVOID PageVA)
 {
     InterlockedPushEntrySList(&Alloc->DataFreeList, (PSLIST_ENTRY)PageVA);
 }

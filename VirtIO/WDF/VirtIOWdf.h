@@ -71,7 +71,7 @@ typedef struct virtio_wdf_driver {
     PVOID RdmaPoolBaseVA;
     PHYSICAL_ADDRESS RdmaPoolBasePA;
     ULONG64 RdmaPoolSize;
-    LIST_ENTRY RdmaPoolAllocList;   /* List of RDMAPOOL_ALLOC_ENTRY */
+    LIST_ENTRY RdmaPoolAllocList; /* List of RDMAPOOL_ALLOC_ENTRY */
 
 } VIRTIO_WDF_DRIVER, *PVIRTIO_WDF_DRIVER;
 

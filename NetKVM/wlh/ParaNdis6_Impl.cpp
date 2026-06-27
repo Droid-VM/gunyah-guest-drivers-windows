@@ -29,6 +29,7 @@
 #include "ParaNdis6.h"
 #include "kdebugprint.h"
 #include "ParaNdis_DebugHistory.h"
+#include "ParaNdis_RdmaPool.h"
 #include "Trace.h"
 #ifdef NETKVM_WPP_ENABLED
 #include "ParaNdis6_Impl.tmh"
@@ -112,6 +113,19 @@ BOOLEAN ParaNdis_InitialAllocatePhysicalMemory(PARANDIS_ADAPTER *pContext,
         return false;
     }
 #endif
+    /* Protected VM: RX/control DMA memory must come from the restricted pool. */
+    if (pContext->RdmaPoolActive)
+    {
+        pAddresses->Virtual = ParaNdis_RdmaPoolAllocate(pContext, ulSize, &pAddresses->Physical);
+        if (pAddresses->Virtual != NULL)
+        {
+            pAddresses->size = ulSize;
+            pContext->extraStatistics.allocatedSharedMemory += ulSize;
+            return TRUE;
+        }
+        return FALSE;
+    }
+
     NdisMAllocateSharedMemory(pContext->MiniportHandle, ulSize, TRUE, &pAddresses->Virtual, &pAddresses->Physical);
     if (pAddresses->Virtual != NULL)
     {
@@ -133,6 +147,11 @@ Parameters:
 ***********************************************************/
 VOID ParaNdis_FreePhysicalMemory(PARANDIS_ADAPTER *pContext, tCompletePhysicalAddress *pAddresses)
 {
+    if (ParaNdis_RdmaPoolContains(pContext, pAddresses->Virtual))
+    {
+        ParaNdis_RdmaPoolFree(pContext, pAddresses->Virtual, pAddresses->size);
+        return;
+    }
     NdisMFreeSharedMemory(pContext->MiniportHandle, pAddresses->size, TRUE, pAddresses->Virtual, pAddresses->Physical);
 }
 

@@ -53,11 +53,7 @@ static NTSTATUS VirtIOWdfConnectRdmaPool(PVIRTIO_WDF_DRIVER pWdfDriver)
     pWdfDriver->RdmaPoolActive = FALSE;
 
     /* Find rdmapool device by its interface GUID */
-    status = IoGetDeviceInterfaces(
-        &GUID_DEVINTERFACE_RDMAPOOL,
-        NULL,
-        0,
-        &deviceInterfaceList);
+    status = IoGetDeviceInterfaces(&GUID_DEVINTERFACE_RDMAPOOL, NULL, 0, &deviceInterfaceList);
     if (!NT_SUCCESS(status) || deviceInterfaceList == NULL || *deviceInterfaceList == L'\0') {
         DPrintf(0, "%s: rdmapool device interface not found (0x%x)\n", __FUNCTION__, status);
         if (deviceInterfaceList) {
@@ -69,11 +65,8 @@ static NTSTATUS VirtIOWdfConnectRdmaPool(PVIRTIO_WDF_DRIVER pWdfDriver)
     /* Open the first device in the list */
     RtlInitUnicodeString(&deviceName, deviceInterfaceList);
 
-    status = IoGetDeviceObjectPointer(
-        &deviceName,
-        FILE_ALL_ACCESS,
-        &pWdfDriver->RdmaPoolFileObject,
-        &pWdfDriver->RdmaPoolDeviceObject);
+    status = IoGetDeviceObjectPointer(&deviceName, FILE_ALL_ACCESS, &pWdfDriver->RdmaPoolFileObject,
+                                      &pWdfDriver->RdmaPoolDeviceObject);
 
     ExFreePool(deviceInterfaceList);
 
@@ -86,14 +79,9 @@ static NTSTATUS VirtIOWdfConnectRdmaPool(PVIRTIO_WDF_DRIVER pWdfDriver)
     KeInitializeEvent(&event, NotificationEvent, FALSE);
     RtlZeroMemory(&queryOutput, sizeof(queryOutput));
 
-    irp = IoBuildDeviceIoControlRequest(
-        IOCTL_RDMAPOOL_QUERY_POOL,
-        pWdfDriver->RdmaPoolDeviceObject,
-        NULL, 0,
-        &queryOutput, sizeof(queryOutput),
-        FALSE,
-        &event,
-        &iosb);
+    irp = IoBuildDeviceIoControlRequest(IOCTL_RDMAPOOL_QUERY_POOL, pWdfDriver->RdmaPoolDeviceObject,
+                                        NULL, 0, &queryOutput, sizeof(queryOutput), FALSE, &event,
+                                        &iosb);
 
     if (irp == NULL) {
         ObDereferenceObject(pWdfDriver->RdmaPoolFileObject);
@@ -123,9 +111,9 @@ static NTSTATUS VirtIOWdfConnectRdmaPool(PVIRTIO_WDF_DRIVER pWdfDriver)
     pWdfDriver->RdmaPoolSize = queryOutput.TotalSize;
     pWdfDriver->RdmaPoolActive = TRUE;
 
-    DPrintf(0, "%s: Connected to rdmapool - VA=%p PA=0x%llx Size=0x%llx\n",
-        __FUNCTION__, pWdfDriver->RdmaPoolBaseVA,
-        pWdfDriver->RdmaPoolBasePA.QuadPart, pWdfDriver->RdmaPoolSize);
+    DPrintf(0, "%s: Connected to rdmapool - VA=%p PA=0x%llx Size=0x%llx\n", __FUNCTION__,
+            pWdfDriver->RdmaPoolBaseVA, pWdfDriver->RdmaPoolBasePA.QuadPart,
+            pWdfDriver->RdmaPoolSize);
 
     return STATUS_SUCCESS;
 }
@@ -210,10 +198,10 @@ NTSTATUS VirtIOWdfInitialize(PVIRTIO_WDF_DRIVER pWdfDriver, WDFDEVICE Device,
         NTSTATUS rdmaStatus = VirtIOWdfConnectRdmaPool(pWdfDriver);
         if (NT_SUCCESS(rdmaStatus)) {
             DPrintf(0, "%s: Restricted DMA pool active, forcing restricted DMA mode\n",
-                __FUNCTION__);
+                    __FUNCTION__);
         } else {
-            DPrintf(0, "%s: rdmapool not available (0x%x), using normal DMA\n",
-                __FUNCTION__, rdmaStatus);
+            DPrintf(0, "%s: rdmapool not available (0x%x), using normal DMA\n", __FUNCTION__,
+                    rdmaStatus);
         }
     }
 

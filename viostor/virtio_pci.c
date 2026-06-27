@@ -135,14 +135,15 @@ static void *mem_alloc_contiguous_pages(void *context, size_t size)
             adaptExt->pageOffset += (ULONG)size;
             RtlZeroMemory(ptr, size);
             RhelDbgPrint(TRACE_LEVEL_INFORMATION,
-                " rdmapool: alloc %Id bytes @ VA=%p (offset=0x%x)\n",
-                size, ptr, adaptExt->pageOffset);
+                         " rdmapool: alloc %Id bytes @ VA=%p (offset=0x%x)\n",
+                         size,
+                         ptr,
+                         adaptExt->pageOffset);
             return ptr;
         }
         else
         {
-            RhelDbgPrint(TRACE_LEVEL_FATAL,
-                " rdmapool: Ran out of restricted DMA pool memory (%Id)\n", size);
+            RhelDbgPrint(TRACE_LEVEL_FATAL, " rdmapool: Ran out of restricted DMA pool memory (%Id)\n", size);
             return NULL;
         }
     }
@@ -327,13 +328,12 @@ VirtIOSystemOps VioStorSystemOps = {
  * Send an IOCTL to the rdmapool device and wait for completion.
  * Caller must have adaptExt->rdmaPoolDeviceObject and rdmaPoolFileObject set.
  */
-static NTSTATUS VioStorRdmaPoolIoctl(
-    PADAPTER_EXTENSION adaptExt,
-    ULONG IoControlCode,
-    PVOID InputBuffer,
-    ULONG InputBufferLength,
-    PVOID OutputBuffer,
-    ULONG OutputBufferLength)
+static NTSTATUS VioStorRdmaPoolIoctl(PADAPTER_EXTENSION adaptExt,
+                                     ULONG IoControlCode,
+                                     PVOID InputBuffer,
+                                     ULONG InputBufferLength,
+                                     PVOID OutputBuffer,
+                                     ULONG OutputBufferLength)
 {
     KEVENT event;
     IO_STATUS_BLOCK iosb;
@@ -344,16 +344,18 @@ static NTSTATUS VioStorRdmaPoolIoctl(
     KeInitializeEvent(&event, NotificationEvent, FALSE);
     RtlZeroMemory(&iosb, sizeof(iosb));
 
-    irp = IoBuildDeviceIoControlRequest(
-        IoControlCode,
-        adaptExt->rdmaPoolDeviceObject,
-        InputBuffer, InputBufferLength,
-        OutputBuffer, OutputBufferLength,
-        FALSE,
-        &event,
-        &iosb);
+    irp = IoBuildDeviceIoControlRequest(IoControlCode,
+                                        adaptExt->rdmaPoolDeviceObject,
+                                        InputBuffer,
+                                        InputBufferLength,
+                                        OutputBuffer,
+                                        OutputBufferLength,
+                                        FALSE,
+                                        &event,
+                                        &iosb);
 
-    if (irp == NULL) {
+    if (irp == NULL)
+    {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -361,7 +363,8 @@ static NTSTATUS VioStorRdmaPoolIoctl(
     irpStack->FileObject = adaptExt->rdmaPoolFileObject;
 
     status = IoCallDriver(adaptExt->rdmaPoolDeviceObject, irp);
-    if (status == STATUS_PENDING) {
+    if (status == STATUS_PENDING)
+    {
         KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
     }
     status = iosb.Status;
@@ -392,19 +395,17 @@ NTSTATUS VioStorConnectRdmaPool(PADAPTER_EXTENSION adaptExt)
 
     adaptExt->rdmaPoolActive = FALSE;
 
-    if (adaptExt->dump_mode) {
+    if (adaptExt->dump_mode)
+    {
         return STATUS_NOT_SUPPORTED;
     }
 
-    status = IoGetDeviceInterfaces(
-        &GUID_DEVINTERFACE_RDMAPOOL,
-        NULL,
-        0,
-        &deviceInterfaceList);
-    if (!NT_SUCCESS(status) || deviceInterfaceList == NULL || *deviceInterfaceList == L'\0') {
-        RhelDbgPrint(TRACE_LEVEL_INFORMATION,
-            " rdmapool: device interface not found (0x%x)\n", status);
-        if (deviceInterfaceList) {
+    status = IoGetDeviceInterfaces(&GUID_DEVINTERFACE_RDMAPOOL, NULL, 0, &deviceInterfaceList);
+    if (!NT_SUCCESS(status) || deviceInterfaceList == NULL || *deviceInterfaceList == L'\0')
+    {
+        RhelDbgPrint(TRACE_LEVEL_INFORMATION, " rdmapool: device interface not found (0x%x)\n", status);
+        if (deviceInterfaceList)
+        {
             ExFreePool(deviceInterfaceList);
         }
         return STATUS_NOT_FOUND;
@@ -412,30 +413,26 @@ NTSTATUS VioStorConnectRdmaPool(PADAPTER_EXTENSION adaptExt)
 
     RtlInitUnicodeString(&deviceName, deviceInterfaceList);
 
-    status = IoGetDeviceObjectPointer(
-        &deviceName,
-        FILE_ALL_ACCESS,
-        &adaptExt->rdmaPoolFileObject,
-        &adaptExt->rdmaPoolDeviceObject);
+    status = IoGetDeviceObjectPointer(&deviceName,
+                                      FILE_ALL_ACCESS,
+                                      &adaptExt->rdmaPoolFileObject,
+                                      &adaptExt->rdmaPoolDeviceObject);
 
     ExFreePool(deviceInterfaceList);
 
-    if (!NT_SUCCESS(status)) {
-        RhelDbgPrint(TRACE_LEVEL_ERROR,
-            " rdmapool: IoGetDeviceObjectPointer failed 0x%x\n", status);
+    if (!NT_SUCCESS(status))
+    {
+        RhelDbgPrint(TRACE_LEVEL_ERROR, " rdmapool: IoGetDeviceObjectPointer failed 0x%x\n", status);
         return status;
     }
 
     /* Query pool info */
     RtlZeroMemory(&queryOutput, sizeof(queryOutput));
-    status = VioStorRdmaPoolIoctl(adaptExt,
-        IOCTL_RDMAPOOL_QUERY_POOL,
-        NULL, 0,
-        &queryOutput, sizeof(queryOutput));
+    status = VioStorRdmaPoolIoctl(adaptExt, IOCTL_RDMAPOOL_QUERY_POOL, NULL, 0, &queryOutput, sizeof(queryOutput));
 
-    if (!NT_SUCCESS(status)) {
-        RhelDbgPrint(TRACE_LEVEL_ERROR,
-            " rdmapool: IOCTL_RDMAPOOL_QUERY_POOL failed 0x%x\n", status);
+    if (!NT_SUCCESS(status))
+    {
+        RhelDbgPrint(TRACE_LEVEL_ERROR, " rdmapool: IOCTL_RDMAPOOL_QUERY_POOL failed 0x%x\n", status);
         ObDereferenceObject(adaptExt->rdmaPoolFileObject);
         adaptExt->rdmaPoolFileObject = NULL;
         return status;
@@ -454,7 +451,8 @@ NTSTATUS VioStorConnectRdmaPool(PADAPTER_EXTENSION adaptExt)
     bouncePages += min(8192, (ULONG)(queryOutput.TotalSize / PAGE_SIZE) / 2);
     totalPages = ringPages + bouncePages;
 
-    if (totalPages > (ULONG)(queryOutput.TotalSize / PAGE_SIZE)) {
+    if (totalPages > (ULONG)(queryOutput.TotalSize / PAGE_SIZE))
+    {
         totalPages = (ULONG)(queryOutput.TotalSize / PAGE_SIZE);
     }
 
@@ -463,15 +461,14 @@ NTSTATUS VioStorConnectRdmaPool(PADAPTER_EXTENSION adaptExt)
     RtlZeroMemory(&reserveInput, sizeof(reserveInput));
     reserveInput.NumPages = totalPages;
 
-    status = VioStorRdmaPoolIoctl(adaptExt,
-        IOCTL_RDMAPOOL_RESERVE,
-        &reserveInput, sizeof(reserveInput),
-        NULL, 0);
+    status = VioStorRdmaPoolIoctl(adaptExt, IOCTL_RDMAPOOL_RESERVE, &reserveInput, sizeof(reserveInput), NULL, 0);
 
-    if (!NT_SUCCESS(status)) {
+    if (!NT_SUCCESS(status))
+    {
         RhelDbgPrint(TRACE_LEVEL_WARNING,
-            " rdmapool: IOCTL_RDMAPOOL_RESERVE failed 0x%x (pages=%u), continuing\n",
-            status, totalPages);
+                     " rdmapool: IOCTL_RDMAPOOL_RESERVE failed 0x%x (pages=%u), continuing\n",
+                     status,
+                     totalPages);
         /* Non-fatal: viostor still works, but overlap with vioinput is possible */
     }
 
@@ -483,18 +480,19 @@ NTSTATUS VioStorConnectRdmaPool(PADAPTER_EXTENSION adaptExt)
     adaptExt->pageOffset = 0;
 
     RhelDbgPrint(TRACE_LEVEL_INFORMATION,
-        " rdmapool: Connected - VA=%p PA=0x%I64x Size=0x%I64x, reserved %u pages\n",
-        adaptExt->rdmaPoolBaseVA,
-        adaptExt->rdmaPoolBasePA.QuadPart,
-        adaptExt->rdmaPoolSize,
-        totalPages);
+                 " rdmapool: Connected - VA=%p PA=0x%I64x Size=0x%I64x, reserved %u pages\n",
+                 adaptExt->rdmaPoolBaseVA,
+                 adaptExt->rdmaPoolBasePA.QuadPart,
+                 adaptExt->rdmaPoolSize,
+                 totalPages);
 
     return STATUS_SUCCESS;
 }
 
 VOID VioStorDisconnectRdmaPool(PADAPTER_EXTENSION adaptExt)
 {
-    if (adaptExt->rdmaPoolFileObject != NULL) {
+    if (adaptExt->rdmaPoolFileObject != NULL)
+    {
         ObDereferenceObject(adaptExt->rdmaPoolFileObject);
         adaptExt->rdmaPoolFileObject = NULL;
     }

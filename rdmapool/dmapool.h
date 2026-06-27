@@ -20,17 +20,12 @@
  * @return STATUS_SUCCESS or STATUS_INSUFFICIENT_RESOURCES.
  */
 NTSTATUS
-DmaPoolInit(
-    _In_ PHYSICAL_ADDRESS PhysicalBase,
-    _In_ PVOID VirtualBase,
-    _In_ SIZE_T TotalSize
-);
+DmaPoolInit(_In_ PHYSICAL_ADDRESS PhysicalBase, _In_ PVOID VirtualBase, _In_ SIZE_T TotalSize);
 
 /*
  * Destroy the DMA pool allocator and free internal resources.
  */
-VOID
-DmaPoolDestroy(VOID);
+VOID DmaPoolDestroy(VOID);
 
 /*
  * Allocate contiguous pages from the restricted DMA pool.
@@ -41,11 +36,7 @@ DmaPoolDestroy(VOID);
  * @return STATUS_SUCCESS or STATUS_INSUFFICIENT_RESOURCES.
  */
 NTSTATUS
-DmaPoolAllocatePages(
-    _In_ ULONG NumPages,
-    _Out_ PVOID *VirtualAddress,
-    _Out_ PHYSICAL_ADDRESS *PhysicalAddress
-);
+DmaPoolAllocatePages(_In_ ULONG NumPages, _Out_ PVOID *VirtualAddress, _Out_ PHYSICAL_ADDRESS *PhysicalAddress);
 
 /*
  * Free pages previously allocated from the restricted DMA pool.
@@ -53,21 +44,14 @@ DmaPoolAllocatePages(
  * @param VirtualAddress    VA returned by DmaPoolAllocatePages.
  * @param NumPages          Number of pages to free.
  */
-VOID
-DmaPoolFreePages(
-    _In_ PVOID VirtualAddress,
-    _In_ ULONG NumPages
-);
+VOID DmaPoolFreePages(_In_ PVOID VirtualAddress, _In_ ULONG NumPages);
 
 /*
  * Query pool base addresses and total size.
  */
-VOID
-DmaPoolQueryInfo(
-    _Out_ PVOID *BaseVirtualAddress,
-    _Out_ PHYSICAL_ADDRESS *BasePhysicalAddress,
-    _Out_ ULONG64 *TotalSize
-);
+VOID DmaPoolQueryInfo(_Out_ PVOID *BaseVirtualAddress,
+                      _Out_ PHYSICAL_ADDRESS *BasePhysicalAddress,
+                      _Out_ ULONG64 *TotalSize);
 
 /*
  * Reserve pages at the start of the pool (mark as allocated in bitmap).
@@ -79,6 +63,4 @@ DmaPoolQueryInfo(
  * @return STATUS_SUCCESS or STATUS_INVALID_PARAMETER.
  */
 NTSTATUS
-DmaPoolReservePages(
-    _In_ ULONG NumPages
-);
+DmaPoolReservePages(_In_ ULONG NumPages);

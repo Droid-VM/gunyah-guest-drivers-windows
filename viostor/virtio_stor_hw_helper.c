@@ -148,13 +148,12 @@ RhelDoFlush(PVOID DeviceExtension, PSRB_TYPE Srb, BOOLEAN resend, BOOLEAN bIsr)
     if (srbExt->bounceCtl)
     {
         RtlCopyMemory((PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET,
-                       &srbExt->vbr.out_hdr, sizeof(srbExt->vbr.out_hdr));
+                      &srbExt->vbr.out_hdr,
+                      sizeof(srbExt->vbr.out_hdr));
 
-        srbExt->sg[0].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET);
+        srbExt->sg[0].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET);
         srbExt->sg[0].length = sizeof(srbExt->vbr.out_hdr);
-        srbExt->sg[1].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_STATUS_OFFSET);
+        srbExt->sg[1].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_STATUS_OFFSET);
         srbExt->sg[1].length = sizeof(srbExt->vbr.status);
     }
     else
@@ -424,18 +423,17 @@ RhelDoUnMap(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
     if (srbExt->bounceCtl)
     {
         RtlCopyMemory((PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET,
-                       &srbExt->vbr.out_hdr, sizeof(srbExt->vbr.out_hdr));
+                      &srbExt->vbr.out_hdr,
+                      sizeof(srbExt->vbr.out_hdr));
         RtlCopyMemory((PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_DISCARD_OFFSET,
-                       srbExt->blk_discard, sizeof(blk_discard_write_zeroes) * BlockDescrCount);
+                      srbExt->blk_discard,
+                      sizeof(blk_discard_write_zeroes) * BlockDescrCount);
 
-        srbExt->sg[0].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET);
+        srbExt->sg[0].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET);
         srbExt->sg[0].length = sizeof(srbExt->vbr.out_hdr);
-        srbExt->sg[1].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_DISCARD_OFFSET);
+        srbExt->sg[1].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_DISCARD_OFFSET);
         srbExt->sg[1].length = sizeof(blk_discard_write_zeroes) * BlockDescrCount;
-        srbExt->sg[2].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_STATUS_OFFSET);
+        srbExt->sg[2].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_STATUS_OFFSET);
         srbExt->sg[2].length = sizeof(srbExt->vbr.status);
     }
     else
@@ -562,16 +560,14 @@ RhelGetSerialNumber(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
     if (srbExt->bounceCtl)
     {
         RtlCopyMemory((PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET,
-                       &srbExt->vbr.out_hdr, sizeof(srbExt->vbr.out_hdr));
+                      &srbExt->vbr.out_hdr,
+                      sizeof(srbExt->vbr.out_hdr));
 
-        srbExt->sg[0].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET);
+        srbExt->sg[0].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_OUTHDR_OFFSET);
         srbExt->sg[0].length = sizeof(srbExt->vbr.out_hdr);
-        srbExt->sg[1].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_SN_OFFSET);
+        srbExt->sg[1].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_SN_OFFSET);
         srbExt->sg[1].length = sizeof(adaptExt->sn);
-        srbExt->sg[2].physAddr = BounceVAtoPA(&adaptExt->bounce,
-                                              (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_STATUS_OFFSET);
+        srbExt->sg[2].physAddr = BounceVAtoPA(&adaptExt->bounce, (PUCHAR)srbExt->bounceCtl + BOUNCE_CTL_STATUS_OFFSET);
         srbExt->sg[2].length = sizeof(srbExt->vbr.status);
     }
     else

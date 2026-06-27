@@ -117,9 +117,15 @@ class CTXDescriptor : public CNdisAllocatable<CTXDescriptor, 'DTHR'>
                 struct VirtIOBufferDescriptor *VirtioSGL,
                 ULONG VirtioSGLSize,
                 bool Indirect,
-                bool AnyLayout)
+                bool AnyLayout,
+                PPARANDIS_ADAPTER Context = nullptr)
     {
-        m_MemoryBuffer.Initialize(DrvHandle);
+        /* Pass the adapter so this per-descriptor buffer comes from the
+         * restricted DMA pool in a Gunyah protected VM. It holds the virtio
+         * net header + copied L2/L3/L4 headers (first 4K) and the indirect
+         * descriptor table (second 4K) - both are read by the backend, so
+         * they must be host-visible (pool) memory, not lent NDIS memory. */
+        m_MemoryBuffer.Initialize(DrvHandle, Context);
         // allocate 8K buffer (or 4K if indirect is not used)
         if (!m_MemoryBuffer.Allocate(PAGE_SIZE * (Indirect ? 2 : 1)))
         {

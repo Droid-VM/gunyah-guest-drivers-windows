@@ -31,6 +31,7 @@
 #include "virtio_ring.h"
 #include "kdebugprint.h"
 #include "ParaNdis_DebugHistory.h"
+#include "ParaNdis_RdmaPool.h"
 #include "Trace.h"
 #ifdef NETKVM_WPP_ENABLED
 #include "ParaNdis_Common.tmh"
@@ -872,6 +873,12 @@ NDIS_STATUS ParaNdis_InitializeContext(PARANDIS_ADAPTER *pContext, PNDIS_RESOURC
             return status;
         }
 
+        /* Connect to the restricted DMA pool (Gunyah protected VM) before any
+         * device-visible memory is allocated. Best-effort: if rdmapool is
+         * absent, RdmaPoolActive stays FALSE and normal NDIS shared memory is
+         * used (ordinary VM). */
+        ParaNdis_RdmaPoolConnect(pContext);
+
         pContext->u64HostFeatures = virtio_get_features(&pContext->IODevice);
         DumpVirtIOFeatures(pContext);
 
@@ -1638,6 +1645,8 @@ static VOID ParaNdis_CleanupContext(PARANDIS_ADAPTER *pContext)
     }
 
     virtio_device_shutdown(&pContext->IODevice);
+
+    ParaNdis_RdmaPoolDisconnect(pContext);
 }
 
 /**********************************************************

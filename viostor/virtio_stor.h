@@ -298,9 +298,9 @@ typedef struct _SRB_EXTENSION
     VRING_DESC_ALIAS desc[VIRTIO_MAX_SG];
     blk_discard_write_zeroes blk_discard[MAX_DISCARD_SEGMENTS];
     /* Bounce buffer tracking (rdmapool) */
-    PVOID bounceCtl;              /* Control slot VA in rdmapool, NULL if not bouncing */
-    PVOID originalDataVA;         /* Original data buffer VA for read copy-back */
-    ULONG bounceDataPageCount;    /* Number of data pages allocated from bounce pool */
+    PVOID bounceCtl;           /* Control slot VA in rdmapool, NULL if not bouncing */
+    PVOID originalDataVA;      /* Original data buffer VA for read copy-back */
+    ULONG bounceDataPageCount; /* Number of data pages allocated from bounce pool */
 } SRB_EXTENSION, *PSRB_EXTENSION;
 
 BOOLEAN

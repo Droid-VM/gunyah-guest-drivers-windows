@@ -75,14 +75,9 @@ static void *AllocateFromRdmaPool(PVIRTIO_WDF_DRIVER pWdfDriver, size_t size)
 
     KeInitializeEvent(&event, NotificationEvent, FALSE);
 
-    irp = IoBuildDeviceIoControlRequest(
-        IOCTL_RDMAPOOL_ALLOCATE,
-        pWdfDriver->RdmaPoolDeviceObject,
-        &allocInput, sizeof(allocInput),
-        &allocOutput, sizeof(allocOutput),
-        FALSE,
-        &event,
-        &iosb);
+    irp = IoBuildDeviceIoControlRequest(IOCTL_RDMAPOOL_ALLOCATE, pWdfDriver->RdmaPoolDeviceObject,
+                                        &allocInput, sizeof(allocInput), &allocOutput,
+                                        sizeof(allocOutput), FALSE, &event, &iosb);
 
     if (irp == NULL) {
         DPrintf(0, "%s: IoBuildDeviceIoControlRequest failed\n", __FUNCTION__);
@@ -99,15 +94,15 @@ static void *AllocateFromRdmaPool(PVIRTIO_WDF_DRIVER pWdfDriver, size_t size)
     }
 
     if (!NT_SUCCESS(status)) {
-        DPrintf(0, "%s: IOCTL_RDMAPOOL_ALLOCATE failed 0x%x (size=0x%x)\n",
-            __FUNCTION__, status, (ULONG)size);
+        DPrintf(0, "%s: IOCTL_RDMAPOOL_ALLOCATE failed 0x%x (size=0x%x)\n", __FUNCTION__, status,
+                (ULONG)size);
         return NULL;
     }
 
     /* Track this allocation for later free */
     {
-        PRDMAPOOL_ALLOC_ENTRY entry = (PRDMAPOOL_ALLOC_ENTRY)
-            ExAllocatePoolUninitialized(NonPagedPool, sizeof(RDMAPOOL_ALLOC_ENTRY), RDMAPOOL_ALLOC_TAG);
+        PRDMAPOOL_ALLOC_ENTRY entry = (PRDMAPOOL_ALLOC_ENTRY)ExAllocatePoolUninitialized(
+            NonPagedPool, sizeof(RDMAPOOL_ALLOC_ENTRY), RDMAPOOL_ALLOC_TAG);
         if (entry != NULL) {
             RtlZeroMemory(entry, sizeof(*entry));
             entry->VirtualAddress = allocOutput.VirtualAddress;
@@ -118,9 +113,8 @@ static void *AllocateFromRdmaPool(PVIRTIO_WDF_DRIVER pWdfDriver, size_t size)
         }
     }
 
-    DPrintf(1, "%s: rdmapool alloc VA=%p PA=0x%llx size=0x%x\n",
-        __FUNCTION__, allocOutput.VirtualAddress,
-        allocOutput.PhysicalAddress.QuadPart, (ULONG)size);
+    DPrintf(1, "%s: rdmapool alloc VA=%p PA=0x%llx size=0x%x\n", __FUNCTION__,
+            allocOutput.VirtualAddress, allocOutput.PhysicalAddress.QuadPart, (ULONG)size);
 
     return allocOutput.VirtualAddress;
 }
@@ -140,14 +134,9 @@ static void FreeToRdmaPool(PVIRTIO_WDF_DRIVER pWdfDriver, void *va, size_t size)
 
     KeInitializeEvent(&event, NotificationEvent, FALSE);
 
-    irp = IoBuildDeviceIoControlRequest(
-        IOCTL_RDMAPOOL_FREE,
-        pWdfDriver->RdmaPoolDeviceObject,
-        &freeInput, sizeof(freeInput),
-        NULL, 0,
-        FALSE,
-        &event,
-        &iosb);
+    irp =
+        IoBuildDeviceIoControlRequest(IOCTL_RDMAPOOL_FREE, pWdfDriver->RdmaPoolDeviceObject,
+                                      &freeInput, sizeof(freeInput), NULL, 0, FALSE, &event, &iosb);
 
     if (irp == NULL) {
         DPrintf(0, "%s: IoBuildDeviceIoControlRequest failed\n", __FUNCTION__);
@@ -288,7 +277,7 @@ PHYSICAL_ADDRESS VirtIOWdfDeviceGetPhysicalAddress(VirtIODevice *vdev, void *va)
     if (IsRdmaPoolAddress(pWdfDriver, va)) {
         PHYSICAL_ADDRESS pa;
         pa.QuadPart = pWdfDriver->RdmaPoolBasePA.QuadPart +
-            ((ULONG_PTR)va - (ULONG_PTR)pWdfDriver->RdmaPoolBaseVA);
+                      ((ULONG_PTR)va - (ULONG_PTR)pWdfDriver->RdmaPoolBaseVA);
         return pa;
     }
 
@@ -307,8 +296,7 @@ void VirtIOWdfDeviceFreeDmaMemory(VirtIODevice *vdev, void *va)
 
         /* Find and remove the tracking entry */
         WdfSpinLockAcquire(pWdfDriver->DmaSpinlock);
-        for (entry = pWdfDriver->RdmaPoolAllocList.Flink;
-             entry != &pWdfDriver->RdmaPoolAllocList;
+        for (entry = pWdfDriver->RdmaPoolAllocList.Flink; entry != &pWdfDriver->RdmaPoolAllocList;
              entry = entry->Flink) {
             PRDMAPOOL_ALLOC_ENTRY candidate =
                 CONTAINING_RECORD(entry, RDMAPOOL_ALLOC_ENTRY, ListEntry);
@@ -391,8 +379,7 @@ static void FreeSlicedBlock(PVIRTIO_DMA_MEMORY_SLICED p)
     if (IsRdmaPoolAddress(p->drv, p->va)) {
         PLIST_ENTRY entry;
         WdfSpinLockAcquire(p->drv->DmaSpinlock);
-        for (entry = p->drv->RdmaPoolAllocList.Flink;
-             entry != &p->drv->RdmaPoolAllocList;
+        for (entry = p->drv->RdmaPoolAllocList.Flink; entry != &p->drv->RdmaPoolAllocList;
              entry = entry->Flink) {
             PRDMAPOOL_ALLOC_ENTRY candidate =
                 CONTAINING_RECORD(entry, RDMAPOOL_ALLOC_ENTRY, ListEntry);
@@ -471,7 +458,7 @@ PVIRTIO_DMA_MEMORY_SLICED VirtIOWdfDeviceAllocDmaMemorySliced(VirtIODevice *vdev
         if (p->va) {
             /* Compute PA directly from pool base offsets */
             p->pa.QuadPart = pWdfDriver->RdmaPoolBasePA.QuadPart +
-                ((ULONG_PTR)p->va - (ULONG_PTR)pWdfDriver->RdmaPoolBaseVA);
+                             ((ULONG_PTR)p->va - (ULONG_PTR)pWdfDriver->RdmaPoolBaseVA);
         }
     } else {
         p->va = AllocateCommonBuffer(pWdfDriver, blockSize, 0);

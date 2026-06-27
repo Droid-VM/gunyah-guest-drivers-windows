@@ -503,6 +503,17 @@ struct _PARANDIS_ADAPTER : public CNdisAllocatable<_PARANDIS_ADAPTER, 'DCTX'>
     VirtIODevice IODevice = {};
     CNdisSharedMemory *pPageAllocator = NULL;
 
+    /* Restricted DMA pool (Gunyah protected VM). When RdmaPoolActive, all
+     * device-visible DMA memory is allocated from the rdmapool driver and
+     * TX is forced through the copy path so packet data lands in the pool.
+     * See ParaNdis_RdmaPool.cpp. */
+    BOOLEAN RdmaPoolActive = FALSE;
+    PDEVICE_OBJECT RdmaPoolDeviceObject = NULL;
+    PFILE_OBJECT RdmaPoolFileObject = NULL;
+    PVOID RdmaPoolBaseVA = NULL;
+    PHYSICAL_ADDRESS RdmaPoolBasePA = {};
+    ULONG64 RdmaPoolSize = 0;
+
 #ifdef PARANDIS_DEBUG_INTERRUPTS
     LARGE_INTEGER LastInterruptTimeStamp = {};
 #endif

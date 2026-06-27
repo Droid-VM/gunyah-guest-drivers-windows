@@ -1,5 +1,6 @@
 #include "ndis56common.h"
 #include "kdebugprint.h"
+#include "ParaNdis_RdmaPool.h"
 #include "Trace.h"
 #ifdef NETKVM_WPP_ENABLED
 #include "ParaNdis_Util.tmh"
@@ -19,6 +20,21 @@ bool CNdisSharedMemory::Allocate(ULONG Size, bool IsCached)
 {
     m_Size = Size;
     m_IsCached = IsCached;
+    m_FromRdmaPool = false;
+
+    /* Protected VM: take device-visible memory from the restricted DMA pool. */
+    if (m_Context != nullptr && m_Context->RdmaPoolActive)
+    {
+        m_VA = ParaNdis_RdmaPoolAllocate(m_Context, Size, &m_PA);
+        if (m_VA != nullptr)
+        {
+            m_FromRdmaPool = true;
+            return true;
+        }
+        DPrintf(0, "rdmapool allocation of 0x%x bytes failed", Size);
+        return false;
+    }
+
     NdisMAllocateSharedMemory(m_DrvHandle, Size, m_IsCached, &m_VA, &m_PA);
     return m_VA != nullptr;
 }
@@ -27,7 +43,14 @@ CNdisSharedMemory::~CNdisSharedMemory()
 {
     if (m_VA != nullptr)
     {
-        NdisMFreeSharedMemory(m_DrvHandle, m_Size, m_IsCached, m_VA, m_PA);
+        if (m_FromRdmaPool)
+        {
+            ParaNdis_RdmaPoolFree(m_Context, m_VA, m_Size);
+        }
+        else
+        {
+            NdisMFreeSharedMemory(m_DrvHandle, m_Size, m_IsCached, m_VA, m_PA);
+        }
         m_VA = nullptr;
     }
 }
