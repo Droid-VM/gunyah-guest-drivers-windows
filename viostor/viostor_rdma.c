@@ -519,7 +519,27 @@ static VOID VioStorPollThreadRoutine(PVOID Context)
             {
                 VioStorCompleteRequest(adaptExt, q + adaptExt->msix_has_config_vector, FALSE);
             }
-            KeStallExecutionProcessor(VIOSTOR_POLL_SPIN_US);
+            /*
+             * Gentle periodic poll (default): SLEEP pollIntervalUs between drains so
+             * this thread yields its CPU instead of pegging a core with a tight
+             * KeStallExecutionProcessor busy-spin. 1ms keeps completion latency low
+             * (reaped within ~1ms, vs the ~250ms StorPort watchdog that capped INTx
+             * at ~5MB/s) without the busy-spin power cost. The thread runs at
+             * PASSIVE_LEVEL (VioStorCompleteRequest releases its lock before we return
+             * here), so KeDelayExecutionThread is legal. PollIntervalUs=0 restores the
+             * tight spin for max IOPS.
+             */
+            if (adaptExt->pollIntervalUs == 0)
+            {
+                KeStallExecutionProcessor(VIOSTOR_POLL_SPIN_US);
+            }
+            else
+            {
+                LARGE_INTEGER pollDelay;
+                /* relative (negative), 100ns units: 1us = 10 * 100ns */
+                pollDelay.QuadPart = -(LONGLONG)(10 * (LONGLONG)adaptExt->pollIntervalUs);
+                KeDelayExecutionThread(KernelMode, FALSE, &pollDelay);
+            }
         }
         else
         {

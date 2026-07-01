@@ -278,6 +278,10 @@ typedef struct _ADAPTER_EXTENSION
     PVOID pollThread;       /* PKTHREAD referenced object */
     KEVENT pollWake;        /* signalled by submit path / kick */
     volatile LONG pollStop; /* set to 1 to ask the thread to exit */
+    ULONG disablePoll;      /* registry DisableCompletionPoll: 1 => ISR/DPC only */
+    ULONG pollIntervalUs;   /* registry PollIntervalUs: sleep this many us between drains
+                             * while I/O is outstanding (default 1000 = 1ms gentle poll);
+                             * 0 => tight KeStallExecutionProcessor spin (max IOPS) */
 #ifdef DBG
     LONG srb_cnt;
     LONG inqueue_cnt;

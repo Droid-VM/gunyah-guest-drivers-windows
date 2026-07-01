@@ -92,11 +92,25 @@ HKR,,TypesSupported,%REG_DWORD%,7
 HKR, "Parameters\PnpInterface", "5", %REG_DWORD%, 0x00000001
 HKR, "Parameters", "BusType", %REG_DWORD%, 0x00000001
 HKR, "Parameters", DmaRemappingCompatible,0x00010001,0
+; Completion reaping. On some platforms (e.g. restricted-DMA-pool / Gunyah) a completion
+; interrupt to an idle vCPU is delivered late or not at all, stalling I/O until the 250ms
+; StorPort watchdog. A poll thread drains the virtqueues while requests are outstanding.
+;  PollIntervalUs: microseconds the poll thread sleeps between drains while I/O is in
+;    flight. Key absent => default 1000 (1ms) = gentle poll: reaps within ~1ms at low CPU.
+;    Set 0 for a tight busy-spin (max IOPS, but pegs a core).
+;  DisableCompletionPoll: 1 = do not run the poll thread (rely on ISR/DPC only). Default 0.
+; Read via StorPortRegistryRead(Global=1) from Services\viostor\Parameters.
+HKR, "Parameters", DisableCompletionPoll, 0x00010001, 0
+HKR, "Parameters", PollIntervalUs, 0x00010001, 1000
 
 [pnpsafe_pci_addreg_msix]
 HKR, "Interrupt Management",, 0x00000010
 HKR, "Interrupt Management\MessageSignaledInterruptProperties",, 0x00000010
-HKR, "Interrupt Management\MessageSignaledInterruptProperties", MSISupported, 0x00010001, 1
+; MSISupported=0 forces line INTx. The crosvm/Gunyah platform this driver targets does not
+; fully implement MSI-X: with MSISupported=1 the MSI-X path yields virtio-blk backend request
+; errors, higher host CPU and slower I/O. Completions are reaped by the poll thread regardless
+; of interrupt mode. (Upstream/KVM has working MSI-X, so keep MSISupported=1 there.)
+HKR, "Interrupt Management\MessageSignaledInterruptProperties", MSISupported, 0x00010001, 0
 HKR, "Interrupt Management\MessageSignaledInterruptProperties", MessageNumberLimit, 0x00010001, 257
 HKR, "Interrupt Management\Affinity Policy",, 0x00000010
 HKR, "Interrupt Management\Affinity Policy", DevicePolicy, 0x00010001, 5
