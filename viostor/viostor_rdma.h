@@ -52,8 +52,11 @@
  * burned only during active I/O, never blocking StartIo); when idle it blocks on
  * the wake event with a safety-net timeout (≈0 CPU).
  */
-#define VIOSTOR_POLL_SPIN_US     10  /* stall between drains while busy */
+#define VIOSTOR_POLL_SPIN_US     10  /* tight-spin stall between drains (PollIntervalUs==0) */
 #define VIOSTOR_POLL_IDLE_MS     100 /* idle safety-net wakeup */
+#define VIOSTOR_POLL_INTERVAL_US                                                                                       \
+    1000 /* default gentle poll interval (1ms); registry                                                               \
+          * PollIntervalUs overrides; 0 selects the tight spin */
 
 typedef struct _BOUNCE_ALLOCATOR
 {

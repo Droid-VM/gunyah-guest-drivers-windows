@@ -558,6 +558,24 @@ VirtIoFindAdapter(IN PVOID DeviceExtension,
     return SP_RETURN_FOUND;
 }
 
+/* Read a REG_DWORD from Services\viostor\Parameters (StorPortRegistryRead Global=1).
+ * Leaves *pValue untouched if the value is absent, so the caller's default holds. */
+static VOID VioStorReadRegistryDword(IN PVOID DeviceExtension, IN PUCHAR ValueName, IN OUT PULONG pValue)
+{
+    ULONG Len = sizeof(ULONG);
+    UCHAR *pBuf = StorPortAllocateRegistryBuffer(DeviceExtension, &Len);
+    if (pBuf == NULL)
+    {
+        return;
+    }
+    memset(pBuf, 0, sizeof(ULONG));
+    if (StorPortRegistryRead(DeviceExtension, ValueName, 1, MINIPORT_REG_DWORD, pBuf, &Len) && Len == sizeof(ULONG))
+    {
+        *pValue = *(ULONG *)pBuf;
+    }
+    StorPortFreeRegistryBuffer(DeviceExtension, pBuf);
+}
+
 BOOLEAN
 VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
 {
@@ -581,7 +599,24 @@ VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
             RhelDbgPrint(TRACE_LEVEL_FATAL, " bounce init failed\n");
             return FALSE;
         }
-        if (!NT_SUCCESS(VioStorStartPollThread(DeviceExtension)))
+        /* The bounce allocator above is required on the rdmapool path regardless of
+         * how completions are reaped. Completion strategy (workaround default): run the
+         * poll thread ON, but as a GENTLE periodic poll -- it sleeps PollIntervalUs
+         * (default 1ms) between drains instead of the old tight busy-spin, so it reaps
+         * completions within ~1ms (no 250ms StorPort-watchdog stall that capped INTx at
+         * ~5MB/s) at low CPU cost, and it blocks entirely when no I/O is outstanding.
+         * The ISR/DPC path (INTx, MSISupported=0) stays wired too. Registry overrides
+         * (Services\viostor\Parameters): PollIntervalUs = us between drains (0 => tight
+         * spin, max IOPS); DisableCompletionPoll=1 => interrupt-only (no poll thread). */
+        adaptExt->pollIntervalUs = VIOSTOR_POLL_INTERVAL_US;
+        VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "PollIntervalUs", &adaptExt->pollIntervalUs);
+        adaptExt->disablePoll = 0;
+        VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "DisableCompletionPoll", &adaptExt->disablePoll);
+        if (adaptExt->disablePoll)
+        {
+            RhelDbgPrint(TRACE_LEVEL_FATAL, " completion poll thread OFF (interrupt-only mode)\n");
+        }
+        else if (!NT_SUCCESS(VioStorStartPollThread(DeviceExtension)))
         {
             RhelDbgPrint(TRACE_LEVEL_FATAL, " poll thread start failed\n");
             return FALSE;

@@ -227,6 +227,12 @@ jobs:
             $has = (Get-ChildItem "$dest" | ForEach-Object Name) -join ' '
             Write-Host "packed $($d.n): $has"
           }
+          # --- bundle installer into the artifact (source: .install_scripts/) ---
+          # INSTALL.cmd (UAC launcher) + install-drivers.ps1 install the 4 restricted-DMA-pool
+          # drivers (rdmapool, viostor, vioinput, NetKVM -- NetKVM last) and remove older versions.
+          Copy-Item .install_scripts\INSTALL.cmd, .install_scripts\install-drivers.ps1 out\ -Force
+          Write-Host "[pkg] bundled out\INSTALL.cmd + out\install-drivers.ps1"
+
           Remove-Item $pfx -Force   # 不上傳私鑰
           Write-Host "=== staged ==="; Get-ChildItem -Recurse out -File | Select FullName
           # 若有任何 driver 的 inf 殘留 INX_* token，明確讓 build 失敗（避免再次靜默出貨壞包）
