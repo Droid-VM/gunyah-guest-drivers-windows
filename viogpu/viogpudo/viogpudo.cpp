@@ -2379,6 +2379,41 @@ NTSTATUS VioGpuAdapter::SetCurrentMode(ULONG Mode, CURRENT_MODE *pCurrentMode)
     return STATUS_UNSUCCESSFUL;
 }
 
+VOID VioGpuAdapter::LogCapsets(VOID)
+{
+    DbgPrint(TRACE_LEVEL_INFORMATION,
+             ("%s host features=0x%I64x guest features=0x%I64x scanouts=%u capsets=%u\n",
+              __FUNCTION__,
+              m_u64HostFeatures,
+              m_u64GuestFeatures,
+              m_u32NumScanouts,
+              m_u32NumCapsets));
+
+    DbgPrint(TRACE_LEVEL_INFORMATION,
+             ("%s feature bits: virgl=%u edid=%u uuid=%u blob=%u context_init=%u\n",
+              __FUNCTION__,
+              ((m_u64HostFeatures & (1ULL << VIRTIO_GPU_F_VIRGL)) != 0) ? 1 : 0,
+              ((m_u64HostFeatures & (1ULL << VIRTIO_GPU_F_EDID)) != 0) ? 1 : 0,
+              ((m_u64HostFeatures & (1ULL << VIRTIO_GPU_F_RESOURCE_UUID)) != 0) ? 1 : 0,
+              ((m_u64HostFeatures & (1ULL << VIRTIO_GPU_F_RESOURCE_BLOB)) != 0) ? 1 : 0,
+              ((m_u64HostFeatures & (1ULL << VIRTIO_GPU_F_CONTEXT_INIT)) != 0) ? 1 : 0));
+
+    for (UINT i = 0; i < m_u32NumCapsets; ++i)
+    {
+        GPU_RESP_CAPSET_INFO info = {};
+        if (m_CtrlQueue.QueryCapsetInfo(i, &info))
+        {
+            DbgPrint(TRACE_LEVEL_INFORMATION,
+                     ("%s capset[%u]: id=%u max_version=%u max_size=%u\n",
+                      __FUNCTION__,
+                      i,
+                      info.capset_id,
+                      info.capset_max_version,
+                      info.capset_max_size));
+        }
+    }
+}
+
 VOID VioGpuAdapter::ResetRdmaAllocator(VOID)
 {
     if (m_Rdma.Active)
@@ -2717,6 +2752,8 @@ NTSTATUS VioGpuAdapter::HWInit(PCM_RESOURCE_LIST pResList, DXGK_DISPLAY_INFORMAT
 
         m_CtrlQueue.SetGpuBuf(&m_GpuBuf);
         m_CursorQueue.SetGpuBuf(&m_GpuBuf);
+        LogCapsets();
+
 
         if (!m_Idr.Init(1))
         {

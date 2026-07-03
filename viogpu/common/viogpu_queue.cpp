@@ -195,6 +195,68 @@ BOOLEAN CtrlQueue::GetDisplayInfo(PGPU_VBUFFER buf, UINT id, PULONG xres, PULONG
     return TRUE;
 }
 
+BOOLEAN CtrlQueue::QueryCapsetInfo(_In_ UINT capset_index, _Out_ PGPU_RESP_CAPSET_INFO capset_info)
+{
+    PGPU_GET_CAPSET_INFO cmd;
+    PGPU_VBUFFER vbuf;
+    PGPU_RESP_CAPSET_INFO resp_buf = NULL;
+    KEVENT event;
+    NTSTATUS status;
+    BOOLEAN ok = FALSE;
+
+    if (capset_info == NULL)
+    {
+        return FALSE;
+    }
+
+    if (!m_pBuf->IsRdmaActive())
+    {
+        resp_buf = reinterpret_cast<PGPU_RESP_CAPSET_INFO>(new (NonPagedPoolNx) BYTE[sizeof(GPU_RESP_CAPSET_INFO)]);
+        if (!resp_buf)
+        {
+            DbgPrint(TRACE_LEVEL_ERROR, ("---> %s Failed allocate %d bytes\n", __FUNCTION__, sizeof(GPU_RESP_CAPSET_INFO)));
+            return FALSE;
+        }
+    }
+
+    cmd = (PGPU_GET_CAPSET_INFO)AllocCmdResp(&vbuf, sizeof(GPU_GET_CAPSET_INFO), resp_buf, sizeof(GPU_RESP_CAPSET_INFO));
+    RtlZeroMemory(cmd, sizeof(GPU_GET_CAPSET_INFO));
+    cmd->hdr.type = VIRTIO_GPU_CMD_GET_CAPSET_INFO;
+    cmd->capset_index = capset_index;
+
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
+    vbuf->complete_cb = NotifyEventCompleteCB;
+    vbuf->complete_ctx = &event;
+    vbuf->auto_release = false;
+
+    LARGE_INTEGER timeout = {0};
+    timeout.QuadPart = Int32x32To64(1000, -10000);
+
+    QueueBuffer(vbuf);
+    status = KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, &timeout);
+    if (status != STATUS_TIMEOUT)
+    {
+        PGPU_RESP_CAPSET_INFO resp = (PGPU_RESP_CAPSET_INFO)vbuf->resp_buf;
+        if (resp->hdr.type == VIRTIO_GPU_RESP_OK_CAPSET_INFO)
+        {
+            RtlCopyMemory(capset_info, resp, sizeof(*capset_info));
+            ok = TRUE;
+        }
+        else
+        {
+            DbgPrint(TRACE_LEVEL_ERROR,
+                     ("%s capset_index=%u failed response=0x%x\n", __FUNCTION__, capset_index, resp->hdr.type));
+        }
+    }
+    else
+    {
+        DbgPrint(TRACE_LEVEL_ERROR, ("%s capset_index=%u timed out\n", __FUNCTION__, capset_index));
+    }
+
+    ReleaseBuffer(vbuf);
+    return ok;
+}
+
 BOOLEAN CtrlQueue::AskDisplayInfo(PGPU_VBUFFER *buf)
 {
     PAGED_CODE();

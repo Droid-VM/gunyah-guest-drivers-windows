@@ -187,6 +187,7 @@ class VioGpuAdapter : IVioGpuPCI
     VOID NotifyResolutionEvent(VOID);
     VOID CloseResolutionEvent(VOID);
     VOID ResetRdmaAllocator(VOID);
+    VOID LogCapsets(VOID);
 
   private:
     VioGpuDod *m_pVioGpuDod;

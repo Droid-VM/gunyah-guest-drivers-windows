@@ -58,6 +58,11 @@ enum virtio_gpu_ctrl_type
     VIRTIO_GPU_CMD_GET_CAPSET_INFO,
     VIRTIO_GPU_CMD_GET_CAPSET,
     VIRTIO_GPU_CMD_GET_EDID,
+    VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID,
+    VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB,
+    VIRTIO_GPU_CMD_SET_SCANOUT_BLOB,
+    VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB,
+    VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB,
 
     /* 3d commands */
     VIRTIO_GPU_CMD_CTX_CREATE = 0x0200,
@@ -286,6 +291,42 @@ typedef struct virtio_gpu_resp_edid
 } GPU_RESP_EDID, *PGPU_RESP_EDID;
 #pragma pack()
 
+#pragma pack(1)
+typedef struct virtio_gpu_get_capset_info
+{
+    GPU_CTRL_HDR hdr;
+    ULONG capset_index;
+    ULONG padding;
+} GPU_GET_CAPSET_INFO, *PGPU_GET_CAPSET_INFO;
+#pragma pack()
+
+#pragma pack(1)
+typedef struct virtio_gpu_resp_capset_info
+{
+    GPU_CTRL_HDR hdr;
+    ULONG capset_id;
+    ULONG capset_max_version;
+    ULONG capset_max_size;
+} GPU_RESP_CAPSET_INFO, *PGPU_RESP_CAPSET_INFO;
+#pragma pack()
+
+#pragma pack(1)
+typedef struct virtio_gpu_get_capset
+{
+    GPU_CTRL_HDR hdr;
+    ULONG capset_id;
+    ULONG capset_version;
+} GPU_GET_CAPSET, *PGPU_GET_CAPSET;
+#pragma pack()
+
+#define VIRTIO_GPU_CAPSET_VIRGL        1
+#define VIRTIO_GPU_CAPSET_VIRGL2       2
+#define VIRTIO_GPU_CAPSET_GFXSTREAM    3
+#define VIRTIO_GPU_CAPSET_VENUS        4
+#define VIRTIO_GPU_CAPSET_CROSS_DOMAIN 5
+#define VIRTIO_GPU_CAPSET_DRM          6
+
+
 #define EDID_V1_BLOCK_SIZE  128
 #define EDID_RAW_BLOCK_SIZE 256
 
@@ -325,8 +366,11 @@ typedef struct _COLOR_CHARACTERISTICS
 
 #pragma pack(pop)
 
-#define VIRTIO_GPU_F_VIRGL 0
-#define VIRTIO_GPU_F_EDID  1
+#define VIRTIO_GPU_F_VIRGL         0
+#define VIRTIO_GPU_F_EDID          1
+#define VIRTIO_GPU_F_RESOURCE_UUID 2
+#define VIRTIO_GPU_F_RESOURCE_BLOB 3
+#define VIRTIO_GPU_F_CONTEXT_INIT  4
 
 #define ISR_REASON_DISPLAY 1
 #define ISR_REASON_CURSOR  2

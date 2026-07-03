@@ -255,6 +255,7 @@ class CtrlQueue : public VioGpuQueue
 
     BOOLEAN GetDisplayInfo(PGPU_VBUFFER buf, UINT id, PULONG xres, PULONG yres);
     BOOLEAN AskDisplayInfo(PGPU_VBUFFER *buf);
+    BOOLEAN QueryCapsetInfo(_In_ UINT capset_index, _Out_ PGPU_RESP_CAPSET_INFO capset_info);
     BOOLEAN AskEdidInfo(PGPU_VBUFFER *buf, UINT id);
     BOOLEAN GetEdidInfo(PGPU_VBUFFER buf, UINT id, PBYTE edid);
 
