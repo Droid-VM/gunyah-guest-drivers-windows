@@ -124,6 +124,12 @@ class VioGpuAdapter : IVioGpuPCI
         return m_FrameSegment.GetSize();
     }
     PDXGKRNL_INTERFACE GetDxgkInterface(void);
+    PRDMA_CLIENT GetRdmaClient(void)
+    {
+        return &m_Rdma;
+    }
+    PVOID AllocateRdmaMemory(_In_ SIZE_T Size, _In_ SIZE_T Alignment);
+
 
     PVIDEO_MODE_INFORMATION GetModeInfo(UINT idx)
     {
@@ -180,6 +186,7 @@ class VioGpuAdapter : IVioGpuPCI
     VOID CreateResolutionEvent(VOID);
     VOID NotifyResolutionEvent(VOID);
     VOID CloseResolutionEvent(VOID);
+    VOID ResetRdmaAllocator(VOID);
 
   private:
     VioGpuDod *m_pVioGpuDod;
@@ -191,6 +198,9 @@ class VioGpuAdapter : IVioGpuPCI
     BYTE m_EDIDs[EDID_RAW_BLOCK_SIZE];
     BOOLEAN m_bEDID;
 
+    RDMA_CLIENT m_Rdma;
+    PUCHAR m_RdmaNextVa;
+    PUCHAR m_RdmaEndVa;
     VirtIODevice m_VioDev;
     CPciResources m_PciResources;
     UINT64 m_u64HostFeatures;

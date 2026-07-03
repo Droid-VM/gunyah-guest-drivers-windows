@@ -207,12 +207,15 @@ BOOLEAN CtrlQueue::AskDisplayInfo(PGPU_VBUFFER *buf)
     KEVENT event;
     NTSTATUS status;
 
-    resp_buf = reinterpret_cast<PGPU_RESP_DISP_INFO>(new (NonPagedPoolNx) BYTE[sizeof(GPU_RESP_DISP_INFO)]);
-
-    if (!resp_buf)
+    resp_buf = NULL;
+    if (!m_pBuf->IsRdmaActive())
     {
-        DbgPrint(TRACE_LEVEL_ERROR, ("---> %s Failed allocate %d bytes\n", __FUNCTION__, sizeof(GPU_RESP_DISP_INFO)));
-        return FALSE;
+        resp_buf = reinterpret_cast<PGPU_RESP_DISP_INFO>(new (NonPagedPoolNx) BYTE[sizeof(GPU_RESP_DISP_INFO)]);
+        if (!resp_buf)
+        {
+            DbgPrint(TRACE_LEVEL_ERROR, ("---> %s Failed allocate %d bytes\n", __FUNCTION__, sizeof(GPU_RESP_DISP_INFO)));
+            return FALSE;
+        }
     }
 
     cmd = (PGPU_CTRL_HDR)AllocCmdResp(&vbuf, sizeof(GPU_CTRL_HDR), resp_buf, sizeof(GPU_RESP_DISP_INFO));
@@ -255,12 +258,15 @@ BOOLEAN CtrlQueue::AskEdidInfo(PGPU_VBUFFER *buf, UINT id)
     KEVENT event;
     NTSTATUS status;
 
-    resp_buf = reinterpret_cast<PGPU_RESP_EDID>(new (NonPagedPoolNx) BYTE[sizeof(GPU_RESP_EDID)]);
-
-    if (!resp_buf)
+    resp_buf = NULL;
+    if (!m_pBuf->IsRdmaActive())
     {
-        DbgPrint(TRACE_LEVEL_ERROR, ("---> %s Failed allocate %d bytes\n", __FUNCTION__, sizeof(GPU_RESP_EDID)));
-        return FALSE;
+        resp_buf = reinterpret_cast<PGPU_RESP_EDID>(new (NonPagedPoolNx) BYTE[sizeof(GPU_RESP_EDID)]);
+        if (!resp_buf)
+        {
+            DbgPrint(TRACE_LEVEL_ERROR, ("---> %s Failed allocate %d bytes\n", __FUNCTION__, sizeof(GPU_RESP_EDID)));
+            return FALSE;
+        }
     }
     cmd = (PGPU_CMD_GET_EDID)AllocCmdResp(&vbuf, sizeof(GPU_CMD_GET_EDID), resp_buf, sizeof(GPU_RESP_EDID));
     RtlZeroMemory(cmd, sizeof(GPU_CMD_GET_EDID));
@@ -598,21 +604,30 @@ void VioGpuQueue::ReleaseBuffer(PGPU_VBUFFER buf)
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
 }
 
-BOOLEAN VioGpuBuf::Init(_In_ UINT cnt)
+BOOLEAN VioGpuBuf::Init(_In_ UINT cnt, _In_opt_ PRDMA_CLIENT pRdmaClient)
 {
     KIRQL OldIrql;
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("---> %s\n", __FUNCTION__));
 
+    m_pRdmaClient = (pRdmaClient != NULL && pRdmaClient->Active && pRdmaClient->BounceInitialized) ? pRdmaClient : NULL;
     m_uCountMin = cnt;
 
     for (UINT i = 0; i < cnt; ++i)
     {
-        PGPU_VBUFFER pvbuf = reinterpret_cast<PGPU_VBUFFER>(new (NonPagedPoolNx) BYTE[VBUFFER_SIZE]);
-        // FIXME
-        RtlZeroMemory(pvbuf, VBUFFER_SIZE);
+        PGPU_VBUFFER pvbuf = NULL;
+        if (m_pRdmaClient != NULL)
+        {
+            pvbuf = reinterpret_cast<PGPU_VBUFFER>(RdmaClientAllocCtl(m_pRdmaClient));
+        }
+        else
+        {
+            pvbuf = reinterpret_cast<PGPU_VBUFFER>(new (NonPagedPoolNx) BYTE[VBUFFER_SIZE]);
+        }
+
         if (pvbuf)
         {
+            RtlZeroMemory(pvbuf, VBUFFER_SIZE);
             KeAcquireSpinLock(&m_SpinLock, &OldIrql);
             InsertTailList(&m_FreeBufs, &pvbuf->list_entry);
             ++m_uCount;
@@ -640,9 +655,15 @@ void VioGpuBuf::Close(void)
         {
             PGPU_VBUFFER pvbuf = CONTAINING_RECORD(pListItem, GPU_VBUFFER, list_entry);
             ASSERT(pvbuf);
-            ASSERT(pvbuf->resp_size <= MAX_INLINE_RESP_SIZE);
 
-            delete[] reinterpret_cast<PBYTE>(pvbuf);
+            if (IsRdmaBuffer(pvbuf))
+            {
+                RdmaClientFreeCtl(m_pRdmaClient, pvbuf);
+            }
+            else
+            {
+                delete[] reinterpret_cast<PBYTE>(pvbuf);
+            }
             --m_uCount;
         }
     }
@@ -657,19 +678,33 @@ void VioGpuBuf::Close(void)
 
             if (pbuf->resp_buf && pbuf->resp_size > MAX_INLINE_RESP_SIZE)
             {
-                delete[] reinterpret_cast<PBYTE>(pbuf->resp_buf);
+                if (IsRdmaBuffer(pbuf->resp_buf))
+                {
+                    RdmaClientFreeChunk(m_pRdmaClient, pbuf->resp_buf);
+                }
+                else
+                {
+                    delete[] reinterpret_cast<PBYTE>(pbuf->resp_buf);
+                }
                 pbuf->resp_buf = NULL;
                 pbuf->resp_size = 0;
             }
 
-            if (pbuf->data_buf && pbuf->data_size)
+            if (pbuf->data_buf && pbuf->data_size && !IsRdmaBuffer(pbuf->data_buf))
             {
                 delete[] reinterpret_cast<PBYTE>(pbuf->data_buf);
                 pbuf->data_buf = NULL;
                 pbuf->data_size = 0;
             }
 
-            delete[] reinterpret_cast<PBYTE>(pbuf);
+            if (IsRdmaBuffer(pbuf))
+            {
+                RdmaClientFreeCtl(m_pRdmaClient, pbuf);
+            }
+            else
+            {
+                delete[] reinterpret_cast<PBYTE>(pbuf);
+            }
             --m_uCount;
         }
     }
@@ -707,8 +742,18 @@ PGPU_VBUFFER VioGpuBuf::GetBuf(_In_ int size, _In_ int resp_size, _In_opt_ void 
 
     if (IsListEmpty(&m_FreeBufs))
     {
-        pbuf = reinterpret_cast<PGPU_VBUFFER>(new (NonPagedPoolNx) BYTE[VBUFFER_SIZE]);
-        ++m_uCount;
+        if (m_pRdmaClient != NULL)
+        {
+            pbuf = reinterpret_cast<PGPU_VBUFFER>(RdmaClientAllocCtl(m_pRdmaClient));
+        }
+        else
+        {
+            pbuf = reinterpret_cast<PGPU_VBUFFER>(new (NonPagedPoolNx) BYTE[VBUFFER_SIZE]);
+        }
+        if (pbuf != NULL)
+        {
+            ++m_uCount;
+        }
     }
     else
     {
@@ -728,6 +773,17 @@ PGPU_VBUFFER VioGpuBuf::GetBuf(_In_ int size, _In_ int resp_size, _In_opt_ void 
     if (resp_size <= MAX_INLINE_RESP_SIZE)
     {
         pbuf->resp_buf = (char *)((ULONG_PTR)pbuf->buf + size);
+    }
+    else if (m_pRdmaClient != NULL)
+    {
+        if ((ULONG)resp_size > m_pRdmaClient->DataChunkSize)
+        {
+            pbuf->resp_buf = NULL;
+        }
+        else
+        {
+            pbuf->resp_buf = (char *)RdmaClientAllocChunk(m_pRdmaClient);
+        }
     }
     else
     {
@@ -786,21 +842,42 @@ void VioGpuBuf::FreeBuf(_In_ PGPU_VBUFFER pbuf)
     }
     if (pbuf->resp_buf && pbuf->resp_size > MAX_INLINE_RESP_SIZE)
     {
-        delete[] reinterpret_cast<PBYTE>(pbuf->resp_buf);
+        if (IsRdmaBuffer(pbuf->resp_buf))
+        {
+            RdmaClientFreeChunk(m_pRdmaClient, pbuf->resp_buf);
+        }
+        else
+        {
+            delete[] reinterpret_cast<PBYTE>(pbuf->resp_buf);
+        }
         pbuf->resp_buf = NULL;
         pbuf->resp_size = 0;
     }
 
     if (pbuf->data_buf && pbuf->data_size)
     {
-        delete[] reinterpret_cast<PBYTE>(pbuf->data_buf);
+        if (IsRdmaBuffer(pbuf->data_buf))
+        {
+            RdmaClientFreeChunk(m_pRdmaClient, pbuf->data_buf);
+        }
+        else
+        {
+            delete[] reinterpret_cast<PBYTE>(pbuf->data_buf);
+        }
         pbuf->data_buf = NULL;
         pbuf->data_size = 0;
     }
 
     if (m_uCount > m_uCountMin)
     {
-        delete[] reinterpret_cast<PBYTE>(pbuf);
+        if (IsRdmaBuffer(pbuf))
+        {
+            RdmaClientFreeCtl(m_pRdmaClient, pbuf);
+        }
+        else
+        {
+            delete[] reinterpret_cast<PBYTE>(pbuf);
+        }
         --m_uCount;
     }
     else
@@ -811,6 +888,11 @@ void VioGpuBuf::FreeBuf(_In_ PGPU_VBUFFER pbuf)
     KeReleaseSpinLock(&m_SpinLock, OldIrql);
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
+}
+
+BOOLEAN VioGpuBuf::IsRdmaBuffer(_In_opt_ PVOID Buffer)
+{
+    return (m_pRdmaClient != NULL && RdmaClientOwnsVA(m_pRdmaClient, Buffer));
 }
 
 PAGED_CODE_SEG_BEGIN
@@ -824,6 +906,7 @@ VioGpuBuf::VioGpuBuf()
     InitializeListHead(&m_InUseBufs);
     KeInitializeSpinLock(&m_SpinLock);
     m_uCount = 0;
+    m_pRdmaClient = NULL;
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
 }
@@ -851,7 +934,7 @@ VioGpuMemSegment::VioGpuMemSegment(void)
     m_bSystemMemory = FALSE;
     m_bMapped = FALSE;
     m_Size = 0;
-    DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
+    m_pRdmaClient = NULL;
 }
 
 VioGpuMemSegment::~VioGpuMemSegment(void)
@@ -865,7 +948,12 @@ VioGpuMemSegment::~VioGpuMemSegment(void)
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
 }
 
-BOOLEAN VioGpuMemSegment::Init(_In_ UINT size, _In_opt_ PPHYSICAL_ADDRESS pPAddr)
+BOOLEAN VioGpuMemSegment::IsRdmaBuffer(_In_opt_ PVOID Buffer)
+{
+    return (m_pRdmaClient != NULL && RdmaClientOwnsVA(m_pRdmaClient, Buffer));
+}
+
+BOOLEAN VioGpuMemSegment::Init(_In_ UINT size, _In_opt_ PPHYSICAL_ADDRESS pPAddr, _In_opt_ PRDMA_CLIENT pRdmaClient, _In_opt_ PVOID pRdmaVAddr)
 {
     PAGED_CODE();
 
@@ -877,7 +965,14 @@ BOOLEAN VioGpuMemSegment::Init(_In_ UINT size, _In_opt_ PPHYSICAL_ADDRESS pPAddr
     UINT sglsize = sizeof(SCATTER_GATHER_LIST) + (sizeof(SCATTER_GATHER_ELEMENT) * pages);
     size = pages * PAGE_SIZE;
 
-    if ((pPAddr == NULL) || pPAddr->QuadPart == 0LL)
+    m_pRdmaClient = (pRdmaClient != NULL && pRdmaClient->Active) ? pRdmaClient : NULL;
+    if (pRdmaVAddr != NULL)
+    {
+        m_pVAddr = pRdmaVAddr;
+        RtlZeroMemory(m_pVAddr, size);
+        m_bSystemMemory = TRUE;
+    }
+    else if ((pPAddr == NULL) || pPAddr->QuadPart == 0LL)
     {
         m_pVAddr = new (NonPagedPoolNx) BYTE[size];
 
@@ -906,7 +1001,7 @@ BOOLEAN VioGpuMemSegment::Init(_In_ UINT size, _In_opt_ PPHYSICAL_ADDRESS pPAddr
         DbgPrint(TRACE_LEVEL_FATAL, ("%s insufficient resources to allocate MDLs\n", __FUNCTION__));
         return FALSE;
     }
-    if (m_bSystemMemory == TRUE)
+    if (m_bSystemMemory == TRUE && !IsRdmaBuffer(m_pVAddr))
     {
         __try
         {
@@ -933,7 +1028,7 @@ BOOLEAN VioGpuMemSegment::Init(_In_ UINT size, _In_opt_ PPHYSICAL_ADDRESS pPAddr
     {
         PHYSICAL_ADDRESS pa = {0};
         ASSERT(MmIsAddressValid(buf));
-        pa = MmGetPhysicalAddress(buf);
+        pa = IsRdmaBuffer(buf) ? RdmaClientVAtoPA(m_pRdmaClient, buf) : MmGetPhysicalAddress(buf);
         if (pa.QuadPart == 0LL)
         {
             DbgPrint(TRACE_LEVEL_FATAL, ("%s Invalid PA buf = %p element %d\n", __FUNCTION__, buf, i));
@@ -959,7 +1054,7 @@ PHYSICAL_ADDRESS VioGpuMemSegment::GetPhysicalAddress(void)
     PHYSICAL_ADDRESS pa = {0};
     if (m_pVAddr && MmIsAddressValid(m_pVAddr))
     {
-        pa = MmGetPhysicalAddress(m_pVAddr);
+        pa = IsRdmaBuffer(m_pVAddr) ? RdmaClientVAtoPA(m_pRdmaClient, m_pVAddr) : MmGetPhysicalAddress(m_pVAddr);
     }
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
@@ -975,7 +1070,7 @@ void VioGpuMemSegment::Close(void)
 
     if (m_pMdl)
     {
-        if (m_bSystemMemory)
+        if (m_bSystemMemory && !IsRdmaBuffer(m_pVAddr))
         {
             MmUnlockPages(m_pMdl);
         }
@@ -985,7 +1080,10 @@ void VioGpuMemSegment::Close(void)
 
     if (m_bSystemMemory)
     {
-        delete[] reinterpret_cast<PBYTE>(m_pVAddr);
+        if (!IsRdmaBuffer(m_pVAddr))
+        {
+            delete[] reinterpret_cast<PBYTE>(m_pVAddr);
+        }
     }
     else
     {

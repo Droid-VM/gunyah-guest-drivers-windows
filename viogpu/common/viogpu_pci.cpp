@@ -102,10 +102,22 @@ void WriteVirtIODeviceWord(ULONG_PTR ulRegister, u16 wValue)
 
 void *mem_alloc_contiguous_pages(void *context, size_t size)
 {
+    IVioGpuPCI *pdev = static_cast<IVioGpuPCI *>(context);
+    PRDMA_CLIENT rdma = pdev ? pdev->GetRdmaClient() : NULL;
+    if (rdma != NULL && rdma->Active)
+    {
+        PVOID ptr = pdev->AllocateRdmaMemory(size, PAGE_SIZE);
+        if (ptr != NULL)
+        {
+            RtlZeroMemory(ptr, size);
+            return ptr;
+        }
+        DbgPrint(TRACE_LEVEL_FATAL, ("rdmapool: failed to allocate contiguous %Id bytes\n", size));
+        return NULL;
+    }
+
     PHYSICAL_ADDRESS HighestAcceptable;
     PVOID ptr = NULL;
-
-    UNREFERENCED_PARAMETER(context);
 
     HighestAcceptable.QuadPart = 0xFFFFFFFFFF;
     ptr = MmAllocateContiguousMemory(size, HighestAcceptable);
@@ -122,7 +134,16 @@ void *mem_alloc_contiguous_pages(void *context, size_t size)
 
 void mem_free_contiguous_pages(void *context, void *virt)
 {
-    UNREFERENCED_PARAMETER(context);
+    IVioGpuPCI *pdev = static_cast<IVioGpuPCI *>(context);
+    PRDMA_CLIENT rdma = pdev ? pdev->GetRdmaClient() : NULL;
+    if (rdma != NULL && RdmaClientOwnsVA(rdma, virt))
+    {
+        /*
+         * rdmapool allocations are carved from one adapter-owned contiguous
+         * region and released together in VioGpuAdapterClose().
+         */
+        return;
+    }
     if (virt)
     {
         MmFreeContiguousMemory(virt);
@@ -131,7 +152,12 @@ void mem_free_contiguous_pages(void *context, void *virt)
 
 ULONGLONG mem_get_physical_address(void *context, void *virt)
 {
-    UNREFERENCED_PARAMETER(context);
+    IVioGpuPCI *pdev = static_cast<IVioGpuPCI *>(context);
+    PRDMA_CLIENT rdma = pdev ? pdev->GetRdmaClient() : NULL;
+    if (rdma != NULL && RdmaClientOwnsVA(rdma, virt))
+    {
+        return RdmaClientVAtoPA(rdma, virt).QuadPart;
+    }
 
     PHYSICAL_ADDRESS pa = MmGetPhysicalAddress(virt);
     return pa.QuadPart;

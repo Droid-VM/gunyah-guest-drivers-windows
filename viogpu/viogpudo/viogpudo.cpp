@@ -2324,6 +2324,10 @@ VioGpuAdapter::VioGpuAdapter(_In_ VioGpuDod *pVioGpuDod)
     m_u64GuestFeatures = 0;
     m_u32NumCapsets = 0;
     m_u32NumScanouts = 0;
+    RtlZeroMemory(&m_Rdma, sizeof(m_Rdma));
+    m_RdmaNextVa = NULL;
+    m_RdmaEndVa = NULL;
+
 
     KeInitializeEvent(&m_ConfigUpdateEvent, SynchronizationEvent, FALSE);
 }
@@ -2375,6 +2379,44 @@ NTSTATUS VioGpuAdapter::SetCurrentMode(ULONG Mode, CURRENT_MODE *pCurrentMode)
     return STATUS_UNSUCCESSFUL;
 }
 
+VOID VioGpuAdapter::ResetRdmaAllocator(VOID)
+{
+    if (m_Rdma.Active)
+    {
+        m_RdmaNextVa = (PUCHAR)m_Rdma.BaseVA;
+        m_RdmaEndVa = (PUCHAR)m_Rdma.BaseVA + m_Rdma.Size;
+    }
+    else
+    {
+        m_RdmaNextVa = NULL;
+        m_RdmaEndVa = NULL;
+    }
+}
+
+PVOID VioGpuAdapter::AllocateRdmaMemory(_In_ SIZE_T Size, _In_ SIZE_T Alignment)
+{
+    ULONG_PTR next;
+    ULONG_PTR end;
+
+    if (!m_Rdma.Active || m_RdmaNextVa == NULL || m_RdmaEndVa == NULL || Size == 0)
+    {
+        return NULL;
+    }
+
+    if (Alignment == 0)
+    {
+        Alignment = MEMORY_ALLOCATION_ALIGNMENT;
+    }
+    next = ((ULONG_PTR)m_RdmaNextVa + Alignment - 1) & ~((ULONG_PTR)Alignment - 1);
+    end = next + Size;
+    if (end < next || end > (ULONG_PTR)m_RdmaEndVa)
+    {
+        return NULL;
+    }
+    m_RdmaNextVa = (PUCHAR)end;
+    return (PVOID)next;
+}
+
 NTSTATUS VioGpuAdapter::VioGpuAdapterInit(DXGK_DISPLAY_INFORMATION *pDispInfo)
 {
     PAGED_CODE();
@@ -2389,11 +2431,29 @@ NTSTATUS VioGpuAdapter::VioGpuAdapterInit(DXGK_DISPLAY_INFORMATION *pDispInfo)
         VioGpuDbgBreak();
         return status;
     }
+    status = RdmaClientConnect(&m_Rdma, "viogpu", 64, 64);
+    if (NT_SUCCESS(status))
+    {
+        ResetRdmaAllocator();
+    }
+    else if (status == STATUS_NOT_FOUND)
+    {
+        status = STATUS_SUCCESS;
+    }
+    else
+    {
+        DbgPrint(TRACE_LEVEL_FATAL, ("Failed to connect rdmapool, error %x\n", status));
+        VioGpuDbgBreak();
+        return status;
+    }
+
     status = VirtIoDeviceInit();
     if (!NT_SUCCESS(status))
     {
         DbgPrint(TRACE_LEVEL_FATAL, ("Failed to initialize virtio device, error %x\n", status));
         VioGpuDbgBreak();
+        RdmaClientDisconnect(&m_Rdma);
+        ResetRdmaAllocator();
         return status;
     }
 
@@ -2450,6 +2510,8 @@ NTSTATUS VioGpuAdapter::VioGpuAdapterInit(DXGK_DISPLAY_INFORMATION *pDispInfo)
     {
         virtio_add_status(&m_VioDev, VIRTIO_CONFIG_S_FAILED);
         VioGpuDbgBreak();
+        RdmaClientDisconnect(&m_Rdma);
+        ResetRdmaAllocator();
     }
 
     DbgPrint(TRACE_LEVEL_VERBOSE, ("<--- %s\n", __FUNCTION__));
@@ -2628,7 +2690,24 @@ NTSTATUS VioGpuAdapter::HWInit(PCM_RESOURCE_LIST pResList, DXGK_DISPLAY_INFORMAT
         DbgPrint(TRACE_LEVEL_FATAL, ("%s size %d\n", __FUNCTION__, size));
         ASSERT(size);
 
-        if (!m_GpuBuf.Init(size))
+        if (m_Rdma.Active)
+        {
+            status = RdmaClientBounceInit(&m_Rdma,
+                                          m_RdmaNextVa,
+                                          size + 32,
+                                          (VBUFFER_SIZE + MEMORY_ALLOCATION_ALIGNMENT - 1) &
+                                              ~(MEMORY_ALLOCATION_ALIGNMENT - 1),
+                                          0,
+                                          256 * 1024);
+            if (!NT_SUCCESS(status))
+            {
+                DbgPrint(TRACE_LEVEL_FATAL, ("Failed to initialize viogpu rdmapool bounce allocator %x\n", status));
+                VioGpuDbgBreak();
+                break;
+            }
+        }
+
+        if (!m_GpuBuf.Init(size, &m_Rdma))
         {
             DbgPrint(TRACE_LEVEL_FATAL, ("Failed to initialize buffers\n"));
             status = STATUS_INSUFFICIENT_RESOURCES;
@@ -2750,6 +2829,9 @@ NTSTATUS VioGpuAdapter::HWClose(void)
 
     m_FrameSegment.Close();
     m_CursorSegment.Close();
+    RdmaClientDisconnect(&m_Rdma);
+    ResetRdmaAllocator();
+
 
     DbgPrint(TRACE_LEVEL_INFORMATION, ("<--- %s\n", __FUNCTION__));
 
@@ -4011,7 +4093,23 @@ BOOLEAN VioGpuAdapter::GpuObjectAttach(UINT res_id, VioGpuObj *obj)
     UINT size = 0;
     sgl = obj->GetSGList();
     size = sizeof(GPU_MEM_ENTRY) * sgl->NumberOfElements;
-    ents = reinterpret_cast<PGPU_MEM_ENTRY>(new (NonPagedPoolNx) BYTE[size]);
+    if (m_Rdma.Active)
+    {
+        if (!m_Rdma.BounceInitialized || size > m_Rdma.DataChunkSize)
+        {
+            DbgPrint(TRACE_LEVEL_FATAL,
+                     ("<--- %s rdmapool attach list too large/unavailable: size=%x chunk=%x\n",
+                      __FUNCTION__,
+                      size,
+                      m_Rdma.DataChunkSize));
+            return FALSE;
+        }
+        ents = reinterpret_cast<PGPU_MEM_ENTRY>(RdmaClientAllocChunk(&m_Rdma));
+    }
+    else
+    {
+        ents = reinterpret_cast<PGPU_MEM_ENTRY>(new (NonPagedPoolNx) BYTE[size]);
+    }
 
     if (!ents)
     {

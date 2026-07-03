@@ -29,6 +29,7 @@
 
 #pragma once
 #include "viogpu.h"
+#include "..\..\rdmapool\rdmaclient.h"
 
 #pragma pack(1)
 typedef struct virtio_gpu_config
@@ -71,9 +72,14 @@ class VioGpuBuf
     ~VioGpuBuf();
     PGPU_VBUFFER GetBuf(_In_ int size, _In_ int resp_size, _In_opt_ void *resp_buf);
     void FreeBuf(_In_ PGPU_VBUFFER pbuf);
-    BOOLEAN Init(_In_ UINT cnt);
+    BOOLEAN Init(_In_ UINT cnt, _In_opt_ PRDMA_CLIENT pRdmaClient = NULL);
+    BOOLEAN IsRdmaActive(void)
+    {
+        return m_pRdmaClient != NULL;
+    }
 
   private:
+    BOOLEAN IsRdmaBuffer(_In_opt_ PVOID Buffer);
     void Close(void);
 
   private:
@@ -82,6 +88,7 @@ class VioGpuBuf
     KSPIN_LOCK m_SpinLock;
     UINT m_uCount;
     UINT m_uCountMin = 0;
+    PRDMA_CLIENT m_pRdmaClient;
 };
 
 class VioGpuMemSegment
@@ -102,7 +109,7 @@ class VioGpuMemSegment
     {
         return m_pSGList;
     }
-    BOOLEAN Init(_In_ UINT size, _In_opt_ PPHYSICAL_ADDRESS pPAddr);
+    BOOLEAN Init(_In_ UINT size, _In_opt_ PPHYSICAL_ADDRESS pPAddr, _In_opt_ PRDMA_CLIENT pRdmaClient = NULL, _In_opt_ PVOID pRdmaVAddr = NULL);
     BOOLEAN IsSystemMemory(void)
     {
         return m_bSystemMemory;
@@ -110,12 +117,14 @@ class VioGpuMemSegment
     void Close(void);
 
   private:
+    BOOLEAN IsRdmaBuffer(_In_opt_ PVOID Buffer);
     BOOLEAN m_bSystemMemory;
     BOOLEAN m_bMapped;
     PSCATTER_GATHER_LIST m_pSGList;
     PVOID m_pVAddr;
     PMDL m_pMdl;
     SIZE_T m_Size;
+    PRDMA_CLIENT m_pRdmaClient;
 };
 
 class VioGpuObj

@@ -1,3 +1,6 @@
+#include <ntddk.h>
+#include "..\..\rdmapool\rdmaclient.h"
+
 #pragma once
 
 #define REDHAT_PCI_VENDOR_ID          0x1AF4
@@ -109,6 +112,8 @@ class IVioGpuPCI
     virtual PDXGKRNL_INTERFACE GetDxgkInterface() = 0;
     virtual CPciResources *GetPciResources() = 0;
     virtual BOOLEAN IsMSIEnabled() = 0;
+    virtual PRDMA_CLIENT GetRdmaClient() = 0;
+    virtual PVOID AllocateRdmaMemory(_In_ SIZE_T Size, _In_ SIZE_T Alignment) = 0;
 };
 
 NTSTATUS

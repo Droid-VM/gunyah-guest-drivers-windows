@@ -96,6 +96,10 @@ jobs:
             @{ p='viosock/sys/viosock.vcxproj';             c='Win11 Release'; plat='ARM64' },
             @{ p='NetKVM/NetKVM-VS2015.vcxproj';            c='Win11 Release'; plat='ARM64' },
             @{ p='rdmapool/rdmapool.vcxproj';               c='Release';       plat='ARM64' },
+            @{ p='viogpu/viogpures/viogpures.vcxproj';      c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='viogpu/viogpuap/viogpuap.vcxproj';        c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='viogpu/viogpusc/viogpusc.vcxproj';        c='Win11 Release'; plat='ARM64' ; dep=$true },
+            @{ p='viogpu/viogpudo/viogpudo.vcxproj';        c='Win11 Release'; plat='ARM64' },
             @{ p='pvmpower/pvmpower.vcxproj';               c='Release';       plat='ARM64' }
           )
           $failed = @()
