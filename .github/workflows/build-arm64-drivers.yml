@@ -160,6 +160,7 @@ jobs:
             @{ n='NetKVM';    root='NetKVM';    bins=@('netkvm.sys','netkvmp.exe'); inf='netkvm.inf' },
             @{ n='vioinput';  root='vioinput';  bins=@('vioinput.sys','viohidkmdf.sys'); inf='vioinput.inf' },
             @{ n='rdmapool';  root='rdmapool';  bins=@('rdmapool.sys'); inf='rdmapool.inf' },
+            @{ n='viogpu';    root='viogpu';    bins=@('viogpudo.sys','viogpuap.exe','vgpusrv.exe','viogpures.exe'); inf='viogpudo.inf' },
             @{ n='pvmpower';  root='pvmpower';  bins=@('pvmpower.sys'); inf='pvmpower.inf' }
           )
           # 在 root 下找最佳檔案：優先路徑含 ARM64、最新修改
