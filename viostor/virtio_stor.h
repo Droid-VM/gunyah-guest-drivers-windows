@@ -96,6 +96,12 @@ typedef struct VirtIOBufferDescriptor VIO_SG, *PVIO_SG;
 #define MAX_PHYS_SEGMENTS                  512
 #define VIRTIO_MAX_SG                      (3 + MAX_PHYS_SEGMENTS)
 
+/* A direct virtio-blk request always consumes one header and one status
+ * descriptor in addition to its data descriptors. Keep room for a control
+ * request while sizing the data portion of a direct queue. */
+#define VIRTIO_BLK_DIRECT_REQ_DESC_OVERHEAD 2
+#define VIRTIO_BLK_DIRECT_CTRL_DESC_RESERVE 3
+
 #define VIOBLK_POOL_TAG                    'BoiV'
 
 #pragma pack(1)
