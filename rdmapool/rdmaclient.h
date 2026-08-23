@@ -34,8 +34,9 @@
 #define _RDMACLIENT_H_
 
 /* Poll thread cadence defaults (see RdmaClientStartPoll). */
-#define RDMA_CLIENT_POLL_SPIN_US     10  /* tight-spin stall between drains (PollIntervalUs==0) */
-#define RDMA_CLIENT_POLL_IDLE_MS     100 /* idle safety-net wakeup */
+#define RDMA_CLIENT_POLL_SPIN_US      10  /* tight-spin stall between drains (PollIntervalUs==0) */
+#define RDMA_CLIENT_POLL_BURST_US     100 /* short poll after an idle-to-busy transition */
+#define RDMA_CLIENT_POLL_IDLE_MS      100 /* idle safety-net wakeup */
 #define RDMA_CLIENT_POLL_INTERVAL_US 1000
 
 /* Return TRUE while the driver has requests outstanding (poll thread keeps draining). */
@@ -119,10 +120,11 @@ PVOID RdmaClientAllocChunk(PRDMA_CLIENT c);
 VOID RdmaClientFreeChunk(PRDMA_CLIENT c, PVOID chunk);
 
 /*
- * Start the completion poll thread (PASSIVE_LEVEL). While BusyCb returns TRUE
- * the thread calls DrainCb then sleeps PollIntervalUs between drains (default
- * 1ms gentle poll; 0 = tight KeStallExecutionProcessor spin for max IOPS);
- * when idle it blocks on the wake event with a RDMA_CLIENT_POLL_IDLE_MS
+ * Start the completion poll thread (PASSIVE_LEVEL). This helper is independent
+ * of whether the restricted DMA pool is active. After an idle-to-busy
+ * transition it polls for RDMA_CLIENT_POLL_BURST_US, then sleeps PollIntervalUs
+ * between drains (default 1ms gentle poll; 0 = tight polling for max IOPS).
+ * When idle it blocks on the wake event with a RDMA_CLIENT_POLL_IDLE_MS
  * safety-net timeout (~0 CPU).
  */
 NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,

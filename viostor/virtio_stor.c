@@ -615,11 +615,7 @@ VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
     }
     adaptExt->dpc_ok = TRUE;
 
-    /*
-     * Restricted DMA pool path: carve the bounce allocator out of the rdmapool
-     * region left after the vrings, and start the completion poll thread. Both
-     * require PASSIVE_LEVEL, which is why they live here and not in HwInitialize.
-     */
+    /* The bounce allocator and completion poll thread require PASSIVE_LEVEL. */
     if (adaptExt->rdma.Active)
     {
         if (!NT_SUCCESS(VioStorBounceInit(DeviceExtension)))
@@ -627,28 +623,33 @@ VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
             RhelDbgPrint(TRACE_LEVEL_FATAL, " bounce init failed\n");
             return FALSE;
         }
-        /* The bounce allocator above is required on the rdmapool path regardless of
-         * how completions are reaped. Completion strategy (workaround default): run the
-         * poll thread ON, but as a GENTLE periodic poll -- it sleeps PollIntervalUs
-         * (default 1ms) between drains instead of the old tight busy-spin, so it reaps
-         * completions within ~1ms (no 250ms StorPort-watchdog stall that capped INTx at
-         * ~5MB/s) at low CPU cost, and it blocks entirely when no I/O is outstanding.
-         * The interrupt ISR/DPC path stays wired too. Registry overrides
-         * (Services\viostor\Parameters): PollIntervalUs = us between drains (0 => tight
-         * spin, max IOPS); DisableCompletionPoll=1 => interrupt-only (no poll thread). */
-        adaptExt->pollIntervalUs = VIOSTOR_POLL_INTERVAL_US;
-        VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "PollIntervalUs", &adaptExt->pollIntervalUs);
-        adaptExt->disablePoll = 0;
-        VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "DisableCompletionPoll", &adaptExt->disablePoll);
-        if (adaptExt->disablePoll)
-        {
-            RhelDbgPrint(TRACE_LEVEL_FATAL, " completion poll thread OFF (interrupt-only mode)\n");
-        }
-        else if (!NT_SUCCESS(VioStorStartPollThread(DeviceExtension)))
-        {
-            RhelDbgPrint(TRACE_LEVEL_FATAL, " poll thread start failed\n");
-            return FALSE;
-        }
+    }
+
+    /* INTx completion polling is enabled by default because a protected VM may
+     * not have an ITS/MSI-X route even when the restricted DMA pool is absent.
+     * MSI-X keeps its interrupt-only default. The ISR/DPC path remains active
+     * in both modes. Registry overrides (Services\viostor\Parameters):
+     * PollIntervalUs (default 1000, 0 = tight poll) and
+     * DisableCompletionPoll (1 = interrupt-only, 0 = polling enabled). */
+    adaptExt->pollIntervalUs = VIOSTOR_POLL_INTERVAL_US;
+    VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "PollIntervalUs", &adaptExt->pollIntervalUs);
+    adaptExt->disablePoll = adaptExt->msix_enabled ? 1 : 0;
+    VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "DisableCompletionPoll", &adaptExt->disablePoll);
+    if (adaptExt->disablePoll)
+    {
+        RhelDbgPrint(TRACE_LEVEL_INFORMATION, " completion poll thread OFF (interrupt-only mode)\n");
+    }
+    else if (!NT_SUCCESS(VioStorStartPollThread(DeviceExtension)))
+    {
+        RhelDbgPrint(TRACE_LEVEL_ERROR, " poll thread start failed; continuing with interrupts\n");
+    }
+    else
+    {
+        RhelDbgPrint(TRACE_LEVEL_INFORMATION,
+                     " completion poll thread ON (interval %luus, rdmapool %u, MSI-X %u)\n",
+                     adaptExt->pollIntervalUs,
+                     adaptExt->rdma.Active,
+                     adaptExt->msix_enabled);
     }
     return TRUE;
 }
@@ -944,6 +945,7 @@ VirtIoHwInitialize(IN PVOID DeviceExtension)
         InitializeListHead(&element->srb_list);
         element->srb_cnt = 0;
     }
+    InterlockedExchange(&adaptExt->outstandingRequests, 0);
 
     return ret;
 }
@@ -978,12 +980,14 @@ static VOID CompletePendingRequestsOnReset(IN PVOID DeviceExtension)
                     SRB_SET_DATA_TRANSFER_LENGTH(Srb, 0);
                     CompleteRequestWithStatus(DeviceExtension, (PSRB_TYPE)Srb, SRB_STATUS_BUS_RESET);
                     element->srb_cnt--;
+                    InterlockedDecrement(&adaptExt->outstandingRequests);
                 }
             }
         }
         element->srb_cnt = 0;
         VioStorVQUnlock(DeviceExtension, MessageID, &LockHandle, FALSE);
     }
+    InterlockedExchange(&adaptExt->outstandingRequests, 0);
 }
 
 /*
@@ -1036,7 +1040,7 @@ BOOLEAN VioStorResetBus(IN PVOID DeviceExtension)
         VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
     }
 
-    RhelShutDown(DeviceExtension);
+    RhelShutDown(DeviceExtension, FALSE);
     CompletePendingRequestsOnReset(DeviceExtension);
 
     if (!VirtIoHwReinitialize(DeviceExtension))
@@ -1476,7 +1480,7 @@ VirtIoAdapterControl(IN PVOID DeviceExtension, IN SCSI_ADAPTER_CONTROL_TYPE Cont
                 RhelDbgPrint(TRACE_LEVEL_VERBOSE, " ScsiStopAdapter\n");
                 if (adaptExt->removed == TRUE || adaptExt->stopped == TRUE)
                 {
-                    RhelShutDown(DeviceExtension);
+                    RhelShutDown(DeviceExtension, TRUE);
                 }
                 if (adaptExt->stopped)
                 {
@@ -1493,7 +1497,7 @@ VirtIoAdapterControl(IN PVOID DeviceExtension, IN SCSI_ADAPTER_CONTROL_TYPE Cont
         case ScsiRestartAdapter:
             {
                 RhelDbgPrint(TRACE_LEVEL_VERBOSE, " ScsiRestartAdapter\n");
-                RhelShutDown(DeviceExtension);
+                RhelShutDown(DeviceExtension, TRUE);
                 if (!VirtIoHwReinitialize(DeviceExtension))
                 {
                     RhelDbgPrint(TRACE_LEVEL_FATAL, " ScsiRestartAdapter Cannot reinitialize HW\n");
@@ -2384,6 +2388,7 @@ VOID VioStorCompleteRequest(IN PVOID DeviceExtension, IN ULONG MessageID, IN BOO
                     RemoveEntryList(le);
                     bFound = TRUE;
                     element->srb_cnt--;
+                    InterlockedDecrement(&adaptExt->outstandingRequests);
                     break;
                 }
             }

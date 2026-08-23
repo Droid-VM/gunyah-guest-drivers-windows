@@ -271,10 +271,12 @@ typedef struct _ADAPTER_EXTENSION
 
     /* Restricted DMA pool (Gunyah protected VM). When rdma.Active, vrings and
      * all device-visible I/O staging live in the contiguous pool region; see
-     * viostor_rdma.c and the shared client rdmapool/rdmaclient.c (connection,
-     * bounce allocator, completion poll thread). */
+     * viostor_rdma.c and the shared client rdmapool/rdmaclient.c. The poll
+     * portion of RDMA_CLIENT is also used by the normal DMA path. */
     RDMA_CLIENT rdma;
-    ULONG disablePoll;    /* registry DisableCompletionPoll: 1 => ISR/DPC only */
+    volatile LONG outstandingRequests;
+    ULONG disablePoll;    /* registry DisableCompletionPoll: 1 => ISR/DPC only;
+                           * default 0 for INTx, 1 for MSI-X */
     ULONG pollIntervalUs; /* registry PollIntervalUs: sleep this many us between drains
                            * while I/O is outstanding (default 1000 = 1ms gentle poll);
                            * 0 => tight KeStallExecutionProcessor spin (max IOPS) */

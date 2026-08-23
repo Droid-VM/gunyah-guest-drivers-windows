@@ -178,6 +178,7 @@ RhelDoFlush(PVOID DeviceExtension, PSRB_TYPE Srb, BOOLEAN resend, BOOLEAN bIsr)
         notify = virtqueue_kick_prepare(vq);
         InsertTailList(&element->srb_list, &srbExt->vbr.list_entry);
         element->srb_cnt++;
+        InterlockedIncrement(&adaptExt->outstandingRequests);
         if (!resend)
         {
             VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
@@ -199,6 +200,10 @@ RhelDoFlush(PVOID DeviceExtension, PSRB_TYPE Srb, BOOLEAN resend, BOOLEAN bIsr)
     if (notify)
     {
         virtqueue_notify(vq);
+    }
+    if (result)
+    {
+        VioStorPollKick(DeviceExtension);
     }
 
     return result;
@@ -259,6 +264,7 @@ RhelDoReadWrite(PVOID DeviceExtension, PSRB_TYPE Srb)
         notify = virtqueue_kick_prepare(vq);
         InsertTailList(&element->srb_list, &srbExt->vbr.list_entry);
         element->srb_cnt++;
+        InterlockedIncrement(&adaptExt->outstandingRequests);
         VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
 #ifdef DBG
         InterlockedIncrement((LONG volatile *)&adaptExt->inqueue_cnt);
@@ -276,8 +282,7 @@ RhelDoReadWrite(PVOID DeviceExtension, PSRB_TYPE Srb)
         virtqueue_notify(vq);
     }
 
-    /* Wake the completion poll thread (restricted DMA pool path). */
-    if (adaptExt->rdma.Active)
+    if (result)
     {
         VioStorPollKick(DeviceExtension);
     }
@@ -448,6 +453,7 @@ RhelDoUnMap(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
         notify = virtqueue_kick_prepare(vq);
         InsertTailList(&element->srb_list, &srbExt->vbr.list_entry);
         element->srb_cnt++;
+        InterlockedIncrement(&adaptExt->outstandingRequests);
         VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
 #ifdef DBG
         InterlockedIncrement((LONG volatile *)&adaptExt->inqueue_cnt);
@@ -469,6 +475,10 @@ RhelDoUnMap(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
     {
         RhelDbgPrint(TRACE_LEVEL_INFORMATION, " %s virtqueue_notify %d.\n", __FUNCTION__, QueueNumber);
         virtqueue_notify(vq);
+    }
+    if (result)
+    {
+        VioStorPollKick(DeviceExtension);
     }
     return result;
 }
@@ -562,6 +572,7 @@ RhelGetSerialNumber(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
         notify = virtqueue_kick_prepare(vq);
         InsertTailList(&element->srb_list, &srbExt->vbr.list_entry);
         element->srb_cnt++;
+        InterlockedIncrement(&adaptExt->outstandingRequests);
         VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
         result = TRUE;
 #ifdef DBG
@@ -578,18 +589,28 @@ RhelGetSerialNumber(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
     {
         virtqueue_notify(vq);
     }
+    if (result)
+    {
+        VioStorPollKick(DeviceExtension);
+    }
 
     return result;
 }
 
-VOID RhelShutDown(IN PVOID DeviceExtension)
+VOID RhelShutDown(IN PVOID DeviceExtension, IN BOOLEAN StopPollThread)
 {
     ULONG index;
     PADAPTER_EXTENSION adaptExt = (PADAPTER_EXTENSION)DeviceExtension;
 
-    /* Stop the completion poll thread before tearing the queues down so it can
-     * no longer touch them (restricted DMA pool path). */
-    VioStorStopPollThread(DeviceExtension);
+    if (StopPollThread)
+    {
+        /* A real stop/remove tears down the poll thread. A later adapter
+         * restart schedules passive initialization to create a new one. Bus
+         * reset cannot wait for a system thread at DISPATCH_LEVEL, so it uses
+         * reset_in_progress_count to pause the existing thread instead. */
+        VioStorStopPollThread(DeviceExtension);
+        adaptExt->dpc_ok = FALSE;
+    }
 
     virtio_device_reset(&adaptExt->vdev);
     virtio_delete_queues(&adaptExt->vdev);

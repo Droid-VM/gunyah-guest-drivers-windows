@@ -253,15 +253,11 @@ VOID VioStorBounceComplete(PVOID DeviceExtension, PVOID srbExtArg)
 static BOOLEAN VioStorPollBusy(PVOID Context)
 {
     PADAPTER_EXTENSION adaptExt = (PADAPTER_EXTENSION)Context;
-    ULONG q;
-    for (q = 0; q < adaptExt->num_queues; q++)
+    if (adaptExt->reset_in_progress_count || adaptExt->removed || adaptExt->stopped)
     {
-        if (adaptExt->processing_srbs[q].srb_cnt != 0)
-        {
-            return TRUE;
-        }
+        return FALSE;
     }
-    return FALSE;
+    return InterlockedCompareExchange(&adaptExt->outstandingRequests, 0, 0) != 0;
 }
 
 static VOID VioStorPollDrain(PVOID Context)
@@ -277,6 +273,10 @@ static VOID VioStorPollDrain(PVOID Context)
 NTSTATUS VioStorStartPollThread(PVOID DeviceExtension)
 {
     PADAPTER_EXTENSION adaptExt = (PADAPTER_EXTENSION)DeviceExtension;
+    if (adaptExt->rdma.Tag == NULL)
+    {
+        adaptExt->rdma.Tag = "viostor";
+    }
     return RdmaClientStartPoll(&adaptExt->rdma, VioStorPollBusy, VioStorPollDrain, adaptExt, adaptExt->pollIntervalUs);
 }
 

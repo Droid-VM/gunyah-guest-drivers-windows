@@ -137,7 +137,7 @@ RhelDoFlush(IN PVOID DeviceExtension, IN PSRB_TYPE Srb, IN BOOLEAN resend, BOOLE
 BOOLEAN
 RhelDoUnMap(IN PVOID DeviceExtension, IN PSRB_TYPE Srb);
 
-VOID RhelShutDown(IN PVOID DeviceExtension);
+VOID RhelShutDown(IN PVOID DeviceExtension, IN BOOLEAN StopPollThread);
 
 ULONGLONG
 RhelGetLba(IN PVOID DeviceExtension, IN PCDB Cdb);

@@ -327,6 +327,7 @@ static VOID RdmaClientPollThreadRoutine(PVOID Context)
 {
     PRDMA_CLIENT c = (PRDMA_CLIENT)Context;
     LARGE_INTEGER idleTick;
+    BOOLEAN burstComplete = FALSE;
 
     /* Negative = relative, 100ns units. */
     idleTick.QuadPart = -(LONGLONG)(10 * 1000 * RDMA_CLIENT_POLL_IDLE_MS);
@@ -340,34 +341,55 @@ static VOID RdmaClientPollThreadRoutine(PVOID Context)
 
         if (c->BusyCb(c->CbContext))
         {
-            /*
-             * Busy: drain, then either sleep PollIntervalUs (gentle periodic
-             * poll, default 1ms: reaps within ~1ms at low CPU instead of
-             * stalling until the ~250ms StorPort watchdog when a completion
-             * interrupt to an idle vCPU goes missing) or tight-spin when
-             * PollIntervalUs==0 (max IOPS, pegs this thread's core only while
-             * I/O is in flight). This thread runs at PASSIVE_LEVEL — DrainCb
-             * releases its locks before returning — so KeDelayExecutionThread
-             * is legal.
-             */
-            c->DrainCb(c->CbContext);
             if (c->PollIntervalUs == 0)
             {
+                c->DrainCb(c->CbContext);
                 KeStallExecutionProcessor(RDMA_CLIENT_POLL_SPIN_US);
             }
             else
             {
                 LARGE_INTEGER pollDelay;
-                /* relative (negative), 100ns units: 1us = 10 * 100ns */
+
+                /* Catch short completions without paying the scheduler/timer
+                 * delay on the first poll after an idle period. */
+                if (!burstComplete)
+                {
+                    ULONG elapsedUs = 0;
+                    do
+                    {
+                        c->DrainCb(c->CbContext);
+                        if (!c->BusyCb(c->CbContext))
+                        {
+                            break;
+                        }
+                        KeStallExecutionProcessor(RDMA_CLIENT_POLL_SPIN_US);
+                        elapsedUs += RDMA_CLIENT_POLL_SPIN_US;
+                    } while (elapsedUs < RDMA_CLIENT_POLL_BURST_US);
+                    burstComplete = TRUE;
+                }
+                else
+                {
+                    c->DrainCb(c->CbContext);
+                }
+
+                if (!c->BusyCb(c->CbContext))
+                {
+                    burstComplete = FALSE;
+                    continue;
+                }
+
+                /* Relative (negative), 100ns units: 1us = 10 * 100ns.
+                 * Wait on the wake event instead of a blind delay so a new
+                 * submit can request another drain immediately. */
                 pollDelay.QuadPart = -(LONGLONG)(10 * (LONGLONG)c->PollIntervalUs);
-                KeDelayExecutionThread(KernelMode, FALSE, &pollDelay);
+                (void)KeWaitForSingleObject(&c->PollWake, Executive, KernelMode, FALSE, &pollDelay);
             }
         }
         else
         {
             /* Idle: block until a submit kicks us (safety-net timeout). ~0 CPU. */
+            burstComplete = FALSE;
             (void)KeWaitForSingleObject(&c->PollWake, Executive, KernelMode, FALSE, &idleTick);
-            c->DrainCb(c->CbContext);
         }
     }
 
@@ -392,9 +414,13 @@ NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,
     HANDLE hThread = NULL;
     OBJECT_ATTRIBUTES oa;
 
-    if (!c->Active)
+    if (BusyCb == NULL || DrainCb == NULL)
     {
-        return STATUS_NOT_SUPPORTED; /* poll thread only needed on the rdmapool path */
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (c->PollThread != NULL)
+    {
+        return STATUS_SUCCESS;
     }
 
     KeInitializeEvent(&c->PollWake, SynchronizationEvent, FALSE);
@@ -404,6 +430,10 @@ NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,
     c->DrainCb = DrainCb;
     c->CbContext = CbContext;
     c->PollIntervalUs = PollIntervalUs;
+    if (c->Tag == NULL)
+    {
+        c->Tag = "completion";
+    }
 
     InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
     status = PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, &oa, NULL, NULL, RdmaClientPollThreadRoutine, c);
