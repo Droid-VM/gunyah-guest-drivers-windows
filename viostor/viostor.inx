@@ -94,11 +94,11 @@ HKR, "Parameters", "BusType", %REG_DWORD%, 0x00000001
 HKR, "Parameters", DmaRemappingCompatible,0x00010001,0
 ; Completion reaping. On some platforms (e.g. restricted-DMA-pool / Gunyah) a completion
 ; interrupt to an idle vCPU is delivered late or not at all, stalling I/O until the 250ms
-; StorPort watchdog. A poll thread drains the virtqueues while requests are outstanding.
-;  PollIntervalUs: microseconds the poll thread sleeps between drains while I/O is in
-;    flight. Key absent => default 1000 (1ms) = gentle poll: reaps within ~1ms at low CPU.
+; StorPort watchdog. In non-MSI-X mode, QD1 remains interrupt-driven and QD >= 2 uses
+; polling as the completion fast path. MSI-X mode always uses interrupts.
+;  PollIntervalUs: microseconds between drains while polling is active. Default 1000 (1ms).
 ;    Set 0 for a tight busy-spin (max IOPS, but pegs a core).
-;  DisableCompletionPoll: 1 = do not run the poll thread (rely on ISR/DPC only). Default 0.
+;  DisableCompletionPoll: 1 = interrupt-only in non-MSI-X mode. Default 0.
 ; Read via StorPortRegistryRead(Global=1) from Services\viostor\Parameters.
 HKR, "Parameters", DisableCompletionPoll, 0x00010001, 0
 HKR, "Parameters", PollIntervalUs, 0x00010001, 1000

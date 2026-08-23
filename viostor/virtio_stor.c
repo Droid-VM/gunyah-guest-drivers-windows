@@ -625,17 +625,21 @@ VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
         }
     }
 
-    /* INTx completion polling is enabled by default because a protected VM may
-     * not have an ITS/MSI-X route even when the restricted DMA pool is absent.
-     * MSI-X keeps its interrupt-only default. The ISR/DPC path remains active
-     * in both modes. Registry overrides (Services\viostor\Parameters):
+    /* Non-MSI-X completion polling is enabled by default because a protected VM
+     * may not have an ITS/MSI-X route even when the restricted DMA pool is
+     * absent. Polling is used only at QD >= VIOSTOR_POLL_ENTER_QD; QD1 remains
+     * interrupt-driven. MSI-X is always interrupt-only. Registry overrides:
      * PollIntervalUs (default 1000, 0 = tight poll) and
-     * DisableCompletionPoll (1 = interrupt-only, 0 = polling enabled). */
+     * DisableCompletionPoll (1 = interrupt-only for non-MSI-X). */
     adaptExt->pollIntervalUs = VIOSTOR_POLL_INTERVAL_US;
     VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "PollIntervalUs", &adaptExt->pollIntervalUs);
-    adaptExt->disablePoll = adaptExt->msix_enabled ? 1 : 0;
+    adaptExt->disablePoll = 0;
     VioStorReadRegistryDword(DeviceExtension, (PUCHAR) "DisableCompletionPoll", &adaptExt->disablePoll);
-    if (adaptExt->disablePoll)
+    if (adaptExt->msix_enabled)
+    {
+        RhelDbgPrint(TRACE_LEVEL_INFORMATION, " completion poll thread OFF (MSI-X interrupt mode)\n");
+    }
+    else if (adaptExt->disablePoll)
     {
         RhelDbgPrint(TRACE_LEVEL_INFORMATION, " completion poll thread OFF (interrupt-only mode)\n");
     }
@@ -646,10 +650,10 @@ VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
     else
     {
         RhelDbgPrint(TRACE_LEVEL_INFORMATION,
-                     " completion poll thread ON (interval %luus, rdmapool %u, MSI-X %u)\n",
+                     " completion poll fast path ON (enter QD %u, interval %luus, rdmapool %u)\n",
+                     VIOSTOR_POLL_ENTER_QD,
                      adaptExt->pollIntervalUs,
-                     adaptExt->rdma.Active,
-                     adaptExt->msix_enabled);
+                     adaptExt->rdma.Active);
     }
     return TRUE;
 }

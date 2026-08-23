@@ -17,10 +17,10 @@
  *     CHUNKS (a chunk maps to a single virtqueue descriptor, so a transfer
  *     costs ceil(len/chunk) descriptors instead of one per 4KB page), plus
  *     an optional reserved EVENT AREA (vioscsi event buffers).
- *   - A completion POLL THREAD that calls back into the driver to drain its
- *     virtqueues while I/O is outstanding and blocks when idle. This
- *     sidesteps the platform's deep-idle interrupt-wake latency that capped
- *     sequential I/O at ~5 MB/s; the hardware ISR stays the fast path.
+ *   - A completion POLL THREAD whose driver callback selects when polling is
+ *     the fast path. Below that threshold the thread blocks and interrupts
+ *     handle completions. This avoids polling sparse I/O while retaining the
+ *     throughput workaround for deep-idle interrupt-wake latency.
  *
  * What stays in each driver: how a request is staged (virtio-blk out_hdr /
  * status vs. virtio-scsi req / resp unions), which queues to drain and under
@@ -39,7 +39,7 @@
 #define RDMA_CLIENT_POLL_IDLE_MS      100 /* idle safety-net wakeup */
 #define RDMA_CLIENT_POLL_INTERVAL_US 1000
 
-/* Return TRUE while the driver has requests outstanding (poll thread keeps draining). */
+/* Return TRUE while polling should be the completion fast path. */
 typedef BOOLEAN (*RDMA_CLIENT_BUSY_CB)(PVOID Context);
 /* Drain all completion queues once. Runs at PASSIVE_LEVEL on the poll thread;
  * must acquire/release whatever locks the driver's ISR path needs. */
@@ -73,6 +73,7 @@ typedef struct _RDMA_CLIENT
     PVOID PollThread;       /* PKTHREAD referenced object */
     KEVENT PollWake;        /* signalled by the submit path via RdmaClientPollKick */
     volatile LONG PollStop; /* set to 1 to ask the thread to exit */
+    volatile LONG PollActive;
     ULONG PollIntervalUs;   /* us to sleep between drains while busy; 0 = tight spin */
     RDMA_CLIENT_BUSY_CB BusyCb;
     RDMA_CLIENT_DRAIN_CB DrainCb;
@@ -122,10 +123,11 @@ VOID RdmaClientFreeChunk(PRDMA_CLIENT c, PVOID chunk);
 /*
  * Start the completion poll thread (PASSIVE_LEVEL). This helper is independent
  * of whether the restricted DMA pool is active. After an idle-to-busy
- * transition it polls for RDMA_CLIENT_POLL_BURST_US, then sleeps PollIntervalUs
- * between drains (default 1ms gentle poll; 0 = tight polling for max IOPS).
- * When idle it blocks on the wake event with a RDMA_CLIENT_POLL_IDLE_MS
- * safety-net timeout (~0 CPU).
+ * transition selected by BusyCb it polls for RDMA_CLIENT_POLL_BURST_US, then
+ * sleeps PollIntervalUs between drains (default 1ms gentle poll; 0 = tight
+ * polling for max IOPS). When BusyCb returns FALSE, completions are handled by
+ * interrupts and the thread blocks with a RDMA_CLIENT_POLL_IDLE_MS safety-net
+ * timeout (~0 CPU).
  */
 NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,
                              RDMA_CLIENT_BUSY_CB BusyCb,

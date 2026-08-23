@@ -341,6 +341,7 @@ static VOID RdmaClientPollThreadRoutine(PVOID Context)
 
         if (c->BusyCb(c->CbContext))
         {
+            InterlockedExchange(&c->PollActive, 1);
             if (c->PollIntervalUs == 0)
             {
                 c->DrainCb(c->CbContext);
@@ -387,18 +388,28 @@ static VOID RdmaClientPollThreadRoutine(PVOID Context)
         }
         else
         {
+            /* Publish interrupt mode before rechecking load. A submit racing
+             * this transition will either be observed here or signal PollWake. */
+            InterlockedExchange(&c->PollActive, 0);
+            if (c->BusyCb(c->CbContext))
+            {
+                continue;
+            }
             /* Idle: block until a submit kicks us (safety-net timeout). ~0 CPU. */
             burstComplete = FALSE;
             (void)KeWaitForSingleObject(&c->PollWake, Executive, KernelMode, FALSE, &idleTick);
         }
     }
 
+    InterlockedExchange(&c->PollActive, 0);
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 VOID RdmaClientPollKick(PRDMA_CLIENT c)
 {
-    if (c->PollThread)
+    if (c->PollThread &&
+        InterlockedCompareExchange(&c->PollActive, 0, 0) == 0 &&
+        c->BusyCb(c->CbContext))
     {
         KeSetEvent(&c->PollWake, IO_NO_INCREMENT, FALSE);
     }
@@ -425,6 +436,7 @@ NTSTATUS RdmaClientStartPoll(PRDMA_CLIENT c,
 
     KeInitializeEvent(&c->PollWake, SynchronizationEvent, FALSE);
     c->PollStop = 0;
+    c->PollActive = 0;
     c->PollThread = NULL;
     c->BusyCb = BusyCb;
     c->DrainCb = DrainCb;

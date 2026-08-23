@@ -257,7 +257,7 @@ static BOOLEAN VioStorPollBusy(PVOID Context)
     {
         return FALSE;
     }
-    return InterlockedCompareExchange(&adaptExt->outstandingRequests, 0, 0) != 0;
+    return InterlockedCompareExchange(&adaptExt->outstandingRequests, 0, 0) >= VIOSTOR_POLL_ENTER_QD;
 }
 
 static VOID VioStorPollDrain(PVOID Context)

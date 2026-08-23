@@ -39,6 +39,7 @@
 
 /* Default gentle poll interval; registry PollIntervalUs overrides (0 = tight spin). */
 #define VIOSTOR_POLL_INTERVAL_US  RDMA_CLIENT_POLL_INTERVAL_US
+#define VIOSTOR_POLL_ENTER_QD     2
 
 /*
  * Connect to the rdmapool driver and allocate one contiguous region big enough
