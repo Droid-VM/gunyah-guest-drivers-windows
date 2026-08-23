@@ -633,7 +633,7 @@ VirtIoPassiveInitializeRoutine(IN PVOID DeviceExtension)
          * (default 1ms) between drains instead of the old tight busy-spin, so it reaps
          * completions within ~1ms (no 250ms StorPort-watchdog stall that capped INTx at
          * ~5MB/s) at low CPU cost, and it blocks entirely when no I/O is outstanding.
-         * The ISR/DPC path (INTx, MSISupported=0) stays wired too. Registry overrides
+         * The interrupt ISR/DPC path stays wired too. Registry overrides
          * (Services\viostor\Parameters): PollIntervalUs = us between drains (0 => tight
          * spin, max IOPS); DisableCompletionPoll=1 => interrupt-only (no poll thread). */
         adaptExt->pollIntervalUs = VIOSTOR_POLL_INTERVAL_US;

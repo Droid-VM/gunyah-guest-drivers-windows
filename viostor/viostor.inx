@@ -106,11 +106,9 @@ HKR, "Parameters", PollIntervalUs, 0x00010001, 1000
 [pnpsafe_pci_addreg_msix]
 HKR, "Interrupt Management",, 0x00000010
 HKR, "Interrupt Management\MessageSignaledInterruptProperties",, 0x00000010
-; MSISupported=0 forces line INTx. The crosvm/Gunyah platform this driver targets does not
-; fully implement MSI-X: with MSISupported=1 the MSI-X path yields virtio-blk backend request
-; errors, higher host CPU and slower I/O. Completions are reaped by the poll thread regardless
-; of interrupt mode. (Upstream/KVM has working MSI-X, so keep MSISupported=1 there.)
-HKR, "Interrupt Management\MessageSignaledInterruptProperties", MSISupported, 0x00010001, 0
+; Allow Windows to select MSI/MSI-X when the device and platform expose it. The driver still
+; supports line-based INTx as a fallback when MSI/MSI-X is unavailable.
+HKR, "Interrupt Management\MessageSignaledInterruptProperties", MSISupported, 0x00010001, 1
 HKR, "Interrupt Management\MessageSignaledInterruptProperties", MessageNumberLimit, 0x00010001, 257
 HKR, "Interrupt Management\Affinity Policy",, 0x00000010
 HKR, "Interrupt Management\Affinity Policy", DevicePolicy, 0x00010001, 5
@@ -134,4 +132,3 @@ REG_DWORD      = 0x00010001
 SERVICE_KERNEL_DRIVER  = 1
 SERVICE_BOOT_START     = 0
 SERVICE_ERROR_NORMAL   = 1
-
