@@ -27,6 +27,19 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
+      # viofs/svc links against the WinFsp SDK. The default MSI install has no inc/ or lib/;
+      # only ADDLOCAL=ALL brings them (INSTALLLEVEL=1000 does not, measured).
+      - name: Install WinFsp SDK
+        shell: pwsh
+        run: |
+          $msi = "$env:RUNNER_TEMP\winfsp.msi"
+          Invoke-WebRequest -Uri 'https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi' -OutFile $msi -UseBasicParsing
+          $p = Start-Process msiexec.exe -ArgumentList '/i',$msi,'/qn','/norestart','ADDLOCAL=ALL' -Wait -PassThru
+          Write-Host "msiexec exit: $($p.ExitCode)"
+          $inc = 'C:\Program Files (x86)\WinFsp\inc\winfsp\winfsp.h'
+          if (-not (Test-Path $inc)) { Write-Host '::warning::WinFsp SDK headers missing; viofs/svc will not build' }
+          Get-ChildItem 'C:\Program Files (x86)\WinFsp\lib' -EA SilentlyContinue | Select Name | Out-String | Write-Host
+
       # 診斷：列出可用的 Driver 平台工具集 / WDK，方便 build 失敗時定位
       - name: Diagnose toolchain
         shell: pwsh
@@ -96,6 +109,8 @@ jobs:
             @{ p='viosock/sys/viosock.vcxproj';             c='Win11 Release'; plat='ARM64' },
             @{ p='NetKVM/NetKVM-VS2015.vcxproj';            c='Win11 Release'; plat='ARM64' },
             @{ p='viosnd/sys/viosnd.vcxproj';               c='Win11 Release'; plat='ARM64' },
+            @{ p='viofs/pci/viofs.vcxproj';                 c='Win11 Release'; plat='ARM64' },
+            @{ p='viofs/svc/virtiofs.vcxproj';              c='Win11 Release'; plat='ARM64' },
             @{ p='rdmapool/rdmapool.vcxproj';               c='Release';       plat='ARM64' },
             @{ p='pvmpower/pvmpower.vcxproj';               c='Release';       plat='ARM64' }
           )
@@ -157,6 +172,7 @@ jobs:
             @{ n='NetKVM';    root='NetKVM';    bins=@('netkvm.sys','netkvmp.exe'); inf='netkvm.inf' },
             @{ n='vioinput';  root='vioinput';  bins=@('vioinput.sys','viohidkmdf.sys'); inf='vioinput.inf' },
             @{ n='viosnd';    root='viosnd';    bins=@('viosnd.sys');   inf='viosnd.inf' },
+            @{ n='viofs';     root='viofs';     bins=@('viofs.sys','virtiofs.exe'); inf='viofs.inf' },
             @{ n='rdmapool';  root='rdmapool';  bins=@('rdmapool.sys'); inf='rdmapool.inf' },
             @{ n='pvmpower';  root='pvmpower';  bins=@('pvmpower.sys'); inf='pvmpower.inf' }
           )
