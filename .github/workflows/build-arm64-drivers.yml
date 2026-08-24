@@ -95,6 +95,7 @@ jobs:
             @{ p='viorng/viorng/viorng.vcxproj';            c='Win11 Release'; plat='ARM64' },
             @{ p='viosock/sys/viosock.vcxproj';             c='Win11 Release'; plat='ARM64' },
             @{ p='NetKVM/NetKVM-VS2015.vcxproj';            c='Win11 Release'; plat='ARM64' },
+            @{ p='viosnd/sys/viosnd.vcxproj';               c='Win11 Release'; plat='ARM64' },
             @{ p='rdmapool/rdmapool.vcxproj';               c='Release';       plat='ARM64' },
             @{ p='pvmpower/pvmpower.vcxproj';               c='Release';       plat='ARM64' }
           )
@@ -155,6 +156,7 @@ jobs:
             @{ n='viosock';   root='viosock';   bins=@('viosock.sys','viosocklib.dll','viosockwspsvc.exe'); inf='viosock.inf' },
             @{ n='NetKVM';    root='NetKVM';    bins=@('netkvm.sys','netkvmp.exe'); inf='netkvm.inf' },
             @{ n='vioinput';  root='vioinput';  bins=@('vioinput.sys','viohidkmdf.sys'); inf='vioinput.inf' },
+            @{ n='viosnd';    root='viosnd';    bins=@('viosnd.sys');   inf='viosnd.inf' },
             @{ n='rdmapool';  root='rdmapool';  bins=@('rdmapool.sys'); inf='rdmapool.inf' },
             @{ n='pvmpower';  root='pvmpower';  bins=@('pvmpower.sys'); inf='pvmpower.inf' }
           )
