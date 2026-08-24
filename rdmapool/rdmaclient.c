@@ -68,6 +68,11 @@ static NTSTATUS RdmaClientIoctl(PRDMA_CLIENT c,
 
 NTSTATUS RdmaClientConnect(PRDMA_CLIENT c, const char *Tag, ULONG RingPages, ULONG MetaPages)
 {
+    return RdmaClientConnectEx(c, Tag, RingPages, MetaPages, RDMA_CLIENT_DEFAULT_DATA_PAGES);
+}
+
+NTSTATUS RdmaClientConnectEx(PRDMA_CLIENT c, const char *Tag, ULONG RingPages, ULONG MetaPages, ULONG MaxDataPages)
+{
     NTSTATUS status;
     PWSTR deviceInterfaceList = NULL;
     UNICODE_STRING deviceName;
@@ -78,6 +83,8 @@ NTSTATUS RdmaClientConnect(PRDMA_CLIENT c, const char *Tag, ULONG RingPages, ULO
 
     c->Active = FALSE;
     c->Tag = Tag ? Tag : "rdmaclient";
+    c->LastPoolTotalSize = 0;
+    c->LastRequestedPages = 0;
 
     status = IoGetDeviceInterfaces(&GUID_DEVINTERFACE_RDMAPOOL, NULL, 0, &deviceInterfaceList);
     if (!NT_SUCCESS(status) || deviceInterfaceList == NULL || *deviceInterfaceList == L'\0')
@@ -113,11 +120,12 @@ NTSTATUS RdmaClientConnect(PRDMA_CLIENT c, const char *Tag, ULONG RingPages, ULO
     }
 
     poolPages = (ULONG)(queryOutput.TotalSize / PAGE_SIZE);
+    c->LastPoolTotalSize = queryOutput.TotalSize;
 
     /* Region = vrings + caller metadata (control slots / event area) + a data
-     * area capped at 32MB / half the pool (the pool is shared with the other
-     * pVM drivers). */
-    bouncePages = MetaPages + min(8192u, poolPages / 2);
+     * area capped at MaxDataPages / half the pool (the pool is shared with the
+     * other pVM drivers). */
+    bouncePages = MetaPages + min(MaxDataPages, poolPages / 2);
     totalPages = RingPages + bouncePages;
     if (totalPages > poolPages)
     {
@@ -127,6 +135,7 @@ NTSTATUS RdmaClientConnect(PRDMA_CLIENT c, const char *Tag, ULONG RingPages, ULO
     RtlZeroMemory(&allocInput, sizeof(allocInput));
     RtlZeroMemory(&allocOutput, sizeof(allocOutput));
     allocInput.NumPages = totalPages;
+    c->LastRequestedPages = totalPages;
     status = RdmaClientIoctl(c,
                              (ULONG)IOCTL_RDMAPOOL_ALLOCATE,
                              &allocInput,
@@ -155,6 +164,115 @@ NTSTATUS RdmaClientConnect(PRDMA_CLIENT c, const char *Tag, ULONG RingPages, ULO
              RingPages,
              bouncePages);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS RdmaClientOpen(PRDMA_CLIENT c, const char *Tag)
+{
+    NTSTATUS status;
+    PWSTR deviceInterfaceList = NULL;
+    UNICODE_STRING deviceName;
+    RDMAPOOL_QUERY_POOL_OUTPUT queryOutput;
+
+    c->Active = FALSE;
+    c->Tag = Tag ? Tag : "rdmaclient";
+    c->LastPoolTotalSize = 0;
+    c->LastRequestedPages = 0;
+    c->BaseVA = NULL;
+    c->BasePA.QuadPart = 0;
+    c->Size = 0;
+
+    status = IoGetDeviceInterfaces(&GUID_DEVINTERFACE_RDMAPOOL, NULL, 0, &deviceInterfaceList);
+    if (!NT_SUCCESS(status) || deviceInterfaceList == NULL || *deviceInterfaceList == L'\0')
+    {
+        DbgPrint("%s rdmapool: not found (0x%x), using normal DMA\n", c->Tag, status);
+        if (deviceInterfaceList)
+        {
+            ExFreePool(deviceInterfaceList);
+        }
+        return STATUS_NOT_FOUND;
+    }
+
+    RtlInitUnicodeString(&deviceName, deviceInterfaceList);
+    status = IoGetDeviceObjectPointer(&deviceName, FILE_ALL_ACCESS, &c->PoolFileObject, &c->PoolDeviceObject);
+    ExFreePool(deviceInterfaceList);
+    if (!NT_SUCCESS(status))
+    {
+        DbgPrint("%s rdmapool: IoGetDeviceObjectPointer failed 0x%x\n", c->Tag, status);
+        c->PoolFileObject = NULL;
+        c->PoolDeviceObject = NULL;
+        return status;
+    }
+
+    RtlZeroMemory(&queryOutput, sizeof(queryOutput));
+    status = RdmaClientIoctl(c, (ULONG)IOCTL_RDMAPOOL_QUERY_POOL, NULL, 0, &queryOutput, sizeof(queryOutput));
+    if (!NT_SUCCESS(status))
+    {
+        DbgPrint("%s rdmapool: QUERY_POOL failed 0x%x\n", c->Tag, status);
+        ObDereferenceObject(c->PoolFileObject);
+        c->PoolFileObject = NULL;
+        c->PoolDeviceObject = NULL;
+        return status;
+    }
+    c->LastPoolTotalSize = queryOutput.TotalSize;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS RdmaClientAllocRegion(PRDMA_CLIENT c, ULONG Pages, PVOID *Va, PPHYSICAL_ADDRESS Pa)
+{
+    NTSTATUS status;
+    RDMAPOOL_ALLOCATE_INPUT allocInput;
+    RDMAPOOL_ALLOCATE_OUTPUT allocOutput;
+
+    *Va = NULL;
+    Pa->QuadPart = 0;
+    if (c->PoolDeviceObject == NULL || Pages == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&allocInput, sizeof(allocInput));
+    RtlZeroMemory(&allocOutput, sizeof(allocOutput));
+    allocInput.NumPages = Pages;
+    c->LastRequestedPages = Pages;
+    status = RdmaClientIoctl(c,
+                             (ULONG)IOCTL_RDMAPOOL_ALLOCATE,
+                             &allocInput,
+                             sizeof(allocInput),
+                             &allocOutput,
+                             sizeof(allocOutput));
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    *Va = allocOutput.VirtualAddress;
+    *Pa = allocOutput.PhysicalAddress;
+    return STATUS_SUCCESS;
+}
+
+VOID RdmaClientFreeRegion(PRDMA_CLIENT c, PVOID Va, ULONG Pages)
+{
+    RDMAPOOL_FREE_INPUT freeInput;
+
+    if (c->PoolDeviceObject == NULL || Va == NULL || Pages == 0)
+    {
+        return;
+    }
+    RtlZeroMemory(&freeInput, sizeof(freeInput));
+    freeInput.VirtualAddress = Va;
+    freeInput.NumPages = Pages;
+    (void)RdmaClientIoctl(c, (ULONG)IOCTL_RDMAPOOL_FREE, &freeInput, sizeof(freeInput), NULL, 0);
+}
+
+VOID RdmaClientClose(PRDMA_CLIENT c)
+{
+    if (c->PoolFileObject != NULL)
+    {
+        ObDereferenceObject(c->PoolFileObject);
+        c->PoolFileObject = NULL;
+    }
+    c->PoolDeviceObject = NULL;
+    c->Active = FALSE;
 }
 
 VOID RdmaClientDisconnect(PRDMA_CLIENT c)

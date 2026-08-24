@@ -9,7 +9,11 @@ jobs:
       matrix:
         path:
           - check: '.'
-            exclude: './VirtIO|./.*/.*trace.h|./NetKVM/Common/virtio_net.h|./NetKVM/linux/if_ether.h|./viofs/shared/fuse.h|./viofs/svc/scope_exit.h'
+            # viosnd is vendored from github.com/317764920/viosnd and is kept
+            # byte-identical to it so the import can be rebased; reformatting it
+            # to this repo's style would bury both that and the pVM port. Only the
+            # files written here (ViosndRdma.*) are checked.
+            exclude: './VirtIO|./.*/.*trace.h|./NetKVM/Common/virtio_net.h|./NetKVM/linux/if_ether.h|./viofs/shared/fuse.h|./viofs/svc/scope_exit.h|./viosnd/sys/(Adapter|Driver|ViosndDebug|ViosndGuids|ViosndPcm|ViosndTopology|ViosndVirtio|ViosndWaveRT|VirtioSnd|precomp|trace|viosnd)\.'
           - check: 'VirtIO'
             exclude: ''
 
