@@ -187,6 +187,8 @@ void FailFsRequest(IN PDEVICE_CONTEXT Context, IN PVIRTIO_FS_REQUEST Request)
         VirtIOWdfDeviceDmaRxComplete(&Context->VDevice.VIODevice, Request->D2H_Params.transaction, 0);
         Request->D2H_Params.transaction = NULL;
     }
+    /* Nothing was written back, so drop the staging rather than copy it. */
+    VirtFsBounceRelease(Context, Request);
 
     VirtFsDequeueRequest(Context, Request);
     wdfReq = Request->Request;
@@ -358,6 +360,48 @@ static NTSTATUS VirtFsEnqueueRequest(IN PDEVICE_CONTEXT Context, IN PVIRTIO_FS_R
     WdfSpinLockAcquire(Context->RequestsLock);
     PushEntryList(&Context->RequestsList, &Request->ListEntry);
     WdfSpinLockRelease(Context->RequestsLock);
+
+    if (Context->Rdma.Active)
+    {
+        /*
+         * Protected VM: the host cannot see ordinary guest pages, so the WDF
+         * DMA transactions -- which would hand it the physical addresses of
+         * exactly those -- are skipped entirely. The payload is staged into
+         * restricted-DMA-pool memory instead and the descriptors point there.
+         */
+        ULONG outNum = 0, inNum = 0;
+        void *indirect_va = NULL;
+        ULONGLONG indirect_pa = 0;
+        int ret;
+
+        if (!VirtFsBounceBuild(Context, Request, &outNum, &inNum))
+        {
+            VirtFsDequeueRequest(Context, Request);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        /* The indirect area is pool memory too (VirtIOWdfDeviceAllocDmaMemory
+         * took it from rdmapool), so it stays usable on this path. */
+        if (Request->Use_Indirect && (outNum + inNum) > 2 && (outNum + inNum) <= VIRT_FS_INDIRECT_AREA_CAPACITY)
+        {
+            indirect_va = Context->IndirectVA;
+            indirect_pa = (ULONGLONG)Context->IndirectPA.QuadPart;
+        }
+
+        WdfSpinLockAcquire(Request->VQ_Lock);
+        ret = virtqueue_add_buf(Request->VQ, Request->SGTable, outNum, inNum, Request, indirect_va, indirect_pa);
+        WdfSpinLockRelease(Request->VQ_Lock);
+
+        if (ret < 0)
+        {
+            VirtFsBounceRelease(Context, Request);
+            VirtFsDequeueRequest(Context, Request);
+            return STATUS_UNSUCCESSFUL;
+        }
+
+        virtqueue_kick(Request->VQ);
+        return STATUS_PENDING;
+    }
 
     // initiate TX part of the DMA mapping
     if (VirtIOWdfDeviceDmaTxAsync(&Context->VDevice.VIODevice, &Request->H2D_Params, VirtioFsTxTransactionCallback))

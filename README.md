@@ -56,7 +56,7 @@ Legend:
 | viosock | ⚠️ | VirtIO-WDF routing in place, untested on a pVM |
 | Balloon | ⚠️ | VirtIO-WDF routing in place, untested on a pVM |
 | viomem | ⚠️ | VirtIO-WDF routing in place, untested on a pVM |
-| viofs | ⚠️ | VirtIO-WDF routing in place, data path unreviewed |
+| viofs | ✅ | VirtIO-WDF routing + the FUSE payload staged through the rdmapool; ships with `virtiofs.exe`, the WinFsp service that does the mounting, and shared folders work in the DroidVM app |
 | viosnd | ✅ | **not from upstream virtio-win** -- virtio-win has no sound driver ([issue #929](https://github.com/virtio-win/kvm-guest-drivers-windows/issues/929) is still open). Ported from [317764920/viosnd](https://github.com/317764920/viosnd) (BSD-3, PortCls + WaveRT over the low-level VirtioLib), with the pVM staging in `ViosndRdma.{h,cpp}`. Playback and capture both work in the DroidVM app. |
 | viogpu | ❌ | not ported; need huge works(~~dxvk~~ -> ~~gfxstream~~ -> Turnip Driver -> AHardwareBuffer) |
 | pvpanic | ❌ | not ported |

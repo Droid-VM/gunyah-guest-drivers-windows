@@ -228,8 +228,16 @@ static VOID VirtFsReadFromQueue(PDEVICE_CONTEXT context, struct virtqueue *vq, W
                 if (status2 == STATUS_CANCELLED)
                 {
                     fs_req->Request = NULL;
-                    VirtIOWdfDeviceDmaTxComplete(&context->VDevice.VIODevice, fs_req->H2D_Params.transaction);
-                    VirtIOWdfDeviceDmaRxComplete(&context->VDevice.VIODevice, fs_req->D2H_Params.transaction, 0);
+                    if (fs_req->Bounce.Staged)
+                    {
+                        /* Cancelled: there is nowhere left to copy to. */
+                        VirtFsBounceRelease(context, fs_req);
+                    }
+                    else
+                    {
+                        VirtIOWdfDeviceDmaTxComplete(&context->VDevice.VIODevice, fs_req->H2D_Params.transaction);
+                        VirtIOWdfDeviceDmaRxComplete(&context->VDevice.VIODevice, fs_req->D2H_Params.transaction, 0);
+                    }
                 }
             }
             else if (WdfRequestIsCanceled(fs_req->Request))
@@ -276,8 +284,17 @@ static VOID VirtFsReadFromQueue(PDEVICE_CONTEXT context, struct virtqueue *vq, W
                 TraceEvents(TRACE_LEVEL_ERROR, DBG_DPC, "WdfRequestRetrieveOutputBuffer failed");
             }
 #else
-            VirtIOWdfDeviceDmaTxComplete(&context->VDevice.VIODevice, fs_req->H2D_Params.transaction);
-            VirtIOWdfDeviceDmaRxComplete(&context->VDevice.VIODevice, fs_req->D2H_Params.transaction, length);
+            if (fs_req->Bounce.Staged)
+            {
+                /* Move the device's reply out of pool memory and into the
+                 * buffers the caller is about to be handed back. */
+                VirtFsBounceComplete(context, fs_req, length);
+            }
+            else
+            {
+                VirtIOWdfDeviceDmaTxComplete(&context->VDevice.VIODevice, fs_req->H2D_Params.transaction);
+                VirtIOWdfDeviceDmaRxComplete(&context->VDevice.VIODevice, fs_req->D2H_Params.transaction, length);
+            }
 #endif
 
             TraceEvents(TRACE_LEVEL_VERBOSE,

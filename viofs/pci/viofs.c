@@ -197,6 +197,7 @@ VOID VirtFsEvtDeviceContextCleanup(IN WDFOBJECT DeviceObject)
     {
         PVIRTIO_FS_REQUEST fs_req = CONTAINING_RECORD(iter, VIRTIO_FS_REQUEST, ListEntry);
 
+        VirtFsBounceRelease(context, fs_req);
         FreeVirtFsRequest(fs_req);
 
         iter = PopEntryList(&context->RequestsList);

@@ -42,6 +42,7 @@
 #include "virtio.h"
 #include "VirtIOWdf.h"
 #include "fuse.h"
+#include "viofs_rdma.h"
 
 #define VIRT_FS_DMAR                   1
 
@@ -94,6 +95,9 @@ typedef struct _VIRTIO_FS_REQUEST
     BOOLEAN Cancellable;
     struct VirtIOBufferDescriptor SGTable[VIRT_FS_MAX_QUEUE_SIZE];
     PMDL Mdl;
+    /* Payload staging when the request went through rdmapool; Staged is FALSE
+     * on every other path, so completion can ask without knowing. */
+    VIRTFS_BOUNCE Bounce;
 #endif
 } VIRTIO_FS_REQUEST, *PVIRTIO_FS_REQUEST;
 
@@ -108,6 +112,9 @@ typedef struct _DEVICE_CONTEXT
     BOOLEAN SplitToPages;
     PVOID IndirectVA;
     PHYSICAL_ADDRESS IndirectPA;
+    /* The restricted DMA pool, when ACPI\RDMA0000 exists. Active == FALSE
+     * everywhere else and the driver keeps the ordinary DMA path. */
+    RDMA_CLIENT Rdma;
 
     WDFINTERRUPT WdfInterrupt[VQ_TYPE_MAX];
     WDFSPINLOCK *VirtQueueLocks;
