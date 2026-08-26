@@ -6,15 +6,23 @@
 /*
  * Grouping the device's PCM streams into the endpoints Windows will show.
  *
- * virtio-snd hands over a flat list of PCM streams. What ties several of them into one logical
- * device is `hda_fn_nid`, which the spec also uses to associate a stream with its jack and its
- * channel map -- so it, and not the stream's position in the list, is the device identity. The
- * two directions number their nids independently: output device 0 and input device 0 both
- * report nid 0.
+ * virtio-snd hands over a flat list of PCM streams, and the only key the spec makes unique is
+ * `stream_id` -- the stream's position in that list. `hda_fn_nid` is an informational grouping
+ * label with no uniqueness behind it at all: QEMU reports 0 on every stream it offers. Keying an
+ * endpoint on the nid therefore silently discards every stream after the first in a direction on
+ * such a device, so identity here is the stream_id, and each stream the device offers becomes an
+ * endpoint of its own.
  *
- * PortCls exposes one streaming pin per endpoint, so one stream per endpoint is taken. Where a
- * device offers several streams on the same nid the rest are surplus: real hardware uses them
- * for simultaneous playback into one converter, which is not something this driver does.
+ * PortCls exposes one streaming pin per endpoint, so an endpoint carries exactly one stream and a
+ * device with several of them needs one endpoint each to reach them all. How many a card can
+ * carry is bounded by the subdevice names below, and by nothing else.
+ *
+ * The nid is still carried, because two things do read it. It indexes the host's vendor hints,
+ * which are published per direction and per host device. And it is what says a render stream and
+ * a capture stream are the two ends of one host device -- an association taken here in arrival
+ * order, the k-th unpaired render stream on a nid against the k-th unpaired capture stream on it.
+ * Whatever a direction has left over is an endpoint with no counterpart, which is an ordinary
+ * card and not a shortfall.
  */
 
 /* Windows binds subdevice names from static strings in the INF, so the count is fixed at build
@@ -22,10 +30,17 @@
  * exactly like a host that never offered it. */
 #define VIOSND_MAX_ENDPOINTS 4u
 
+/* No stream. Stream 0 is a real stream, so zero cannot carry this and the field has to be set
+ * explicitly -- zeroing the endpoint would otherwise read as "paired with stream 0". */
+#define VIOSND_NO_PEER       MAXULONG
+
 typedef struct _VIOSND_ENDPOINT
 {
-    ULONG StreamId;    /* virtio PCM stream backing this endpoint */
-    ULONG DeviceIndex; /* hda_fn_nid: which host device it is pinned to */
+    ULONG StreamId;    /* virtio PCM stream backing this endpoint; the endpoint's identity */
+    ULONG DeviceIndex; /* hda_fn_nid of the host device it belongs to. Not unique -- see above. */
+    /* The stream backing this endpoint's counterpart in the other direction on the same host
+     * device, or VIOSND_NO_PEER when that nid had none left to give. */
+    ULONG PeerStreamId;
     BOOLEAN Capture;
     VIOSND_FORMAT_CAPS Caps;
     /* What to offer as the default format. Always valid: the host's hint when it gave one,

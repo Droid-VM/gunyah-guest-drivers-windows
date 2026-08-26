@@ -72,19 +72,44 @@ static VOID ViosndHostHint(_In_opt_ const VIOSND_VENDOR_CONFIG *VendorConfig,
     *Kind = table[DeviceIndex].kind;
 }
 
-static PVIOSND_ENDPOINT ViosndFindEndpoint(_In_ PVIOSND_ENDPOINT_SET Set, _In_ BOOLEAN Capture, _In_ ULONG DeviceIndex)
+/*
+ * Ties each endpoint to its counterpart in the other direction on the same host device.
+ *
+ * `hda_fn_nid` is what says two streams are the two ends of one device, but it does not say which
+ * two when a nid carries several streams of a direction, and the spec puts no order on them
+ * beyond the one the device listed them in. Taking them in that order -- the k-th unpaired render
+ * stream on a nid against the k-th unpaired capture stream on it -- is arbitrary, but it is the
+ * same answer on every boot, which is the whole of what an association like this has to be.
+ *
+ * Whatever a direction has left over keeps VIOSND_NO_PEER. That is an ordinary outcome and not a
+ * shortfall: a card with a single direction is a valid card.
+ */
+static VOID ViosndPairByNid(_Inout_ PVIOSND_ENDPOINT_SET Set)
 {
-    PVIOSND_ENDPOINT list = Capture ? Set->Capture : Set->Render;
-    ULONG count = Capture ? Set->CaptureCount : Set->RenderCount;
-
-    for (ULONG i = 0; i < count; ++i)
+    for (ULONG r = 0; r < Set->RenderCount; ++r)
     {
-        if (list[i].DeviceIndex == DeviceIndex)
+        PVIOSND_ENDPOINT render = &Set->Render[r];
+
+        for (ULONG c = 0; c < Set->CaptureCount; ++c)
         {
-            return &list[i];
+            PVIOSND_ENDPOINT capture = &Set->Capture[c];
+
+            if (capture->DeviceIndex != render->DeviceIndex || capture->PeerStreamId != VIOSND_NO_PEER)
+            {
+                continue;
+            }
+
+            render->PeerStreamId = capture->StreamId;
+            capture->PeerStreamId = render->StreamId;
+            VIOSND_LOG(DPFLTR_IHVDRIVER_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "viosnd: nid %u pairs render stream %u with capture stream %u\n",
+                       render->DeviceIndex,
+                       render->StreamId,
+                       capture->StreamId);
+            break;
         }
     }
-    return NULL;
 }
 
 NTSTATUS
@@ -121,21 +146,15 @@ ViosndGroupEndpoints(_In_reads_(InfoCount) const VIRTIO_SND_PCM_INFO *Info,
 
         ULONG deviceIndex = info->hdr.hda_fn_nid;
 
-        /* The first stream on a nid becomes the endpoint; later ones are surplus. */
-        if (ViosndFindEndpoint(Set, capture, deviceIndex) != NULL)
-        {
-            Set->DroppedStreams++;
-            continue;
-        }
-
         PULONG count = capture ? &Set->CaptureCount : &Set->RenderCount;
         if (*count >= VIOSND_MAX_ENDPOINTS)
         {
             VIOSND_LOG(DPFLTR_IHVDRIVER_ID,
                        DPFLTR_ERROR_LEVEL,
-                       "viosnd: %s device %u dropped: this driver exposes at most %u per "
+                       "viosnd: %s stream %u (nid %u) dropped: this driver exposes at most %u per "
                        "direction\n",
                        capture ? "capture" : "render",
+                       i,
                        deviceIndex,
                        VIOSND_MAX_ENDPOINTS);
             Set->DroppedStreams++;
@@ -161,9 +180,10 @@ ViosndGroupEndpoints(_In_reads_(InfoCount) const VIRTIO_SND_PCM_INFO *Info,
              * simply has nothing to give this OS. */
             VIOSND_LOG(DPFLTR_IHVDRIVER_ID,
                        DPFLTR_ERROR_LEVEL,
-                       "viosnd: %s device %u offers no Windows-expressible format "
+                       "viosnd: %s stream %u (nid %u) offers no Windows-expressible format "
                        "(formats=0x%llx rates=0x%llx ch=%u..%u)\n",
                        capture ? "capture" : "render",
+                       i,
                        deviceIndex,
                        caps.Formats,
                        caps.Rates,
@@ -173,10 +193,13 @@ ViosndGroupEndpoints(_In_reads_(InfoCount) const VIRTIO_SND_PCM_INFO *Info,
             continue;
         }
 
-        PVIOSND_ENDPOINT endpoint = capture ? &Set->Capture[*count] : &Set->Render[*count];
+        ULONG slot = *count;
+        PVIOSND_ENDPOINT endpoint = capture ? &Set->Capture[slot] : &Set->Render[slot];
         RtlZeroMemory(endpoint, sizeof(*endpoint));
         endpoint->StreamId = i;
         endpoint->DeviceIndex = deviceIndex;
+        /* Zeroing the endpoint would read as "paired with stream 0", which is a real stream. */
+        endpoint->PeerStreamId = VIOSND_NO_PEER;
         endpoint->Capture = capture;
         endpoint->Caps = caps;
         endpoint->Preferred = preferred;
@@ -187,10 +210,12 @@ ViosndGroupEndpoints(_In_reads_(InfoCount) const VIRTIO_SND_PCM_INFO *Info,
 
         VIOSND_LOG(DPFLTR_IHVDRIVER_ID,
                    DPFLTR_ERROR_LEVEL,
-                   "viosnd: %s endpoint %u <- stream %u, kind=%u, default %uHz %uch %ubit%s\n",
+                   "viosnd: %s endpoint %u <- stream %u (nid %u), kind=%u, default %uHz %uch "
+                   "%ubit%s\n",
                    capture ? "capture" : "render",
-                   deviceIndex,
+                   slot,
                    i,
+                   deviceIndex,
                    hintKind,
                    preferred.SampleRate,
                    preferred.Channels,
@@ -202,5 +227,9 @@ ViosndGroupEndpoints(_In_reads_(InfoCount) const VIRTIO_SND_PCM_INFO *Info,
     {
         return STATUS_NOT_FOUND;
     }
+
+    /* After the cap and the format check, so that an endpoint is never paired against a stream
+     * that did not become one. */
+    ViosndPairByNid(Set);
     return STATUS_SUCCESS;
 }
