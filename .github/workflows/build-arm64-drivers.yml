@@ -1,10 +1,15 @@
 name: Build DroidVM ARM64 drivers
 
-# 可手動觸發，或被其他 workflow 重用（dev-release.yml 會 call 它）。
-# push 觸發移到 dev-release.yml，避免一次 push 重複建置兩次。
+# PR、push、手動觸發共用這一份建置，產物與失敗處理因此完全相同：
+#   - pull_request：PR check 直接編，跑的是下面同一個 job，artifact 也是同一包
+#   - workflow_call：dev-release.yml 在 push 到 master 時 call 它（push 不在這裡
+#     另外掛觸發，避免一次 push 重複建置兩次）
+#   - workflow_dispatch：手動
+# 任何一個 project 編不過、或打包缺件，都讓 job 紅 —— 見下面的 exit 1。
 on:
   workflow_dispatch:
   workflow_call:
+  pull_request:
 
 env:
   CONFIG: "Win11 Release"
@@ -26,6 +31,19 @@ jobs:
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
+
+      # viofs/svc links against the WinFsp SDK. The default MSI install has no inc/ or lib/;
+      # only ADDLOCAL=ALL brings them (INSTALLLEVEL=1000 does not, measured).
+      - name: Install WinFsp SDK
+        shell: pwsh
+        run: |
+          $msi = "$env:RUNNER_TEMP\winfsp.msi"
+          Invoke-WebRequest -Uri 'https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi' -OutFile $msi -UseBasicParsing
+          $p = Start-Process msiexec.exe -ArgumentList '/i',$msi,'/qn','/norestart','ADDLOCAL=ALL' -Wait -PassThru
+          Write-Host "msiexec exit: $($p.ExitCode)"
+          $inc = 'C:\Program Files (x86)\WinFsp\inc\winfsp\winfsp.h'
+          if (-not (Test-Path $inc)) { Write-Host '::warning::WinFsp SDK headers missing; viofs/svc will not build' }
+          Get-ChildItem 'C:\Program Files (x86)\WinFsp\lib' -EA SilentlyContinue | Select Name | Out-String | Write-Host
 
       # 診斷：列出可用的 Driver 平台工具集 / WDK，方便 build 失敗時定位
       - name: Diagnose toolchain
@@ -95,6 +113,9 @@ jobs:
             @{ p='viorng/viorng/viorng.vcxproj';            c='Win11 Release'; plat='ARM64' },
             @{ p='viosock/sys/viosock.vcxproj';             c='Win11 Release'; plat='ARM64' },
             @{ p='NetKVM/NetKVM-VS2015.vcxproj';            c='Win11 Release'; plat='ARM64' },
+            @{ p='viosnd/sys/viosnd.vcxproj';               c='Win11 Release'; plat='ARM64' },
+            @{ p='viofs/pci/viofs.vcxproj';                 c='Win11 Release'; plat='ARM64' },
+            @{ p='viofs/svc/virtiofs.vcxproj';              c='Win11 Release'; plat='ARM64' },
             @{ p='rdmapool/rdmapool.vcxproj';               c='Release';       plat='ARM64' },
             @{ p='pvmpower/pvmpower.vcxproj';               c='Release';       plat='ARM64' }
           )
@@ -108,8 +129,13 @@ jobs:
             }
             Write-Host "::endgroup::"
           }
-          if ($failed.Count) { Write-Host "::warning::Failed: $($failed -join ', ')" }
-          # 不中止 job；簽署/打包會處理已成功的部分
+          if ($failed.Count) {
+            # 讓 job 紅。這裡以前只發 warning 然後往下走，於是一個編不出來的 driver
+            # 跟一個根本沒被列進 $jobs 的 driver 看起來一模一樣 —— viofs 就是這樣
+            # 從來沒從這條 pipeline 出來過，而每一次 run 都是綠的。
+            Write-Host "::error::Failed: $($failed -join ', ')"
+            exit 1
+          }
 
       - name: Sign + package
         shell: pwsh
@@ -155,6 +181,8 @@ jobs:
             @{ n='viosock';   root='viosock';   bins=@('viosock.sys','viosocklib.dll','viosockwspsvc.exe'); inf='viosock.inf' },
             @{ n='NetKVM';    root='NetKVM';    bins=@('netkvm.sys','netkvmp.exe'); inf='netkvm.inf' },
             @{ n='vioinput';  root='vioinput';  bins=@('vioinput.sys','viohidkmdf.sys'); inf='vioinput.inf' },
+            @{ n='viosnd';    root='viosnd';    bins=@('viosnd.sys');   inf='viosnd.inf' },
+            @{ n='viofs';     root='viofs';     bins=@('viofs.sys','virtiofs.exe'); inf='viofs.inf' },
             @{ n='rdmapool';  root='rdmapool';  bins=@('rdmapool.sys'); inf='rdmapool.inf' },
             @{ n='pvmpower';  root='pvmpower';  bins=@('pvmpower.sys'); inf='pvmpower.inf' }
           )
@@ -175,17 +203,19 @@ jobs:
             Get-ChildItem $root -Recurse -Filter $inx -File -EA SilentlyContinue |
               Sort-Object LastWriteTime -Desc | Select-Object -First 1
           }
+          $pkgIncomplete = $false; $infBroken = $false
           foreach ($d in $drv) {
             $dest = "out\drivers\$($d.n)"; New-Item -ItemType Directory -Force $dest | Out-Null
             $ok = $true
             foreach ($b in $d.bins) {
               $f = Pick $d.root $b
-              if ($f) { Copy-Item $f.FullName $dest -Force } else { Write-Host "::warning::$($d.n): 缺 $b"; $ok=$false }
+              if ($f) { Copy-Item $f.FullName $dest -Force } else { Write-Host "::error::$($d.n): 缺 $b"; $ok=$false }
             }
             # 取 inf（優先 ARM64 已 stamp；否則 source 模板）
             $infF = PickInf $d.root $d.inf
-            if ($infF) { Copy-Item $infF.FullName (Join-Path $dest $d.inf) -Force } else { Write-Host "::warning::$($d.n): 缺 $($d.inf)"; $ok=$false }
-            if (-not $ok) { Write-Host "::warning::$($d.n) 不完整，略過簽署"; continue }
+            if ($infF) { Copy-Item $infF.FullName (Join-Path $dest $d.inf) -Force } else { Write-Host "::error::$($d.n): 缺 $($d.inf)"; $ok=$false }
+            # 缺件代表 build 成功但東西不在該在的地方，跟 inf 壞掉一樣不能靜默出貨。
+            if (-not $ok) { Write-Host "::error::$($d.n) 不完整，略過簽署"; $pkgIncomplete = $true; continue }
             $infPath = Join-Path $dest $d.inf
             # 把 .inx 模板的 INX_* token 換掉。上游是用 package project（vioinput/package、
             # VirtRNG Package）透過 build/Driver.*.props 的 <Substitution> 做；本 CI 只 build
@@ -238,8 +268,10 @@ jobs:
 
           Remove-Item $pfx -Force   # 不上傳私鑰
           Write-Host "=== staged ==="; Get-ChildItem -Recurse out -File | Select FullName
-          # 若有任何 driver 的 inf 殘留 INX_* token，明確讓 build 失敗（避免再次靜默出貨壞包）
-          if ($infBroken) { Write-Host "::error::有 driver 的 inf 殘留未替換 INX_* token，build 失敗"; exit 1 }
+          # 打包階段的兩種壞法都讓 build 失敗，避免再次靜默出貨壞包 / 少一包
+          if ($pkgIncomplete) { Write-Host "::error::有 driver 打包缺件，build 失敗" }
+          if ($infBroken) { Write-Host "::error::有 driver 的 inf 殘留未替換 INX_* token，build 失敗" }
+          if ($pkgIncomplete -or $infBroken) { exit 1 }
 
       - name: Upload drivers artifact
         uses: actions/upload-artifact@v4

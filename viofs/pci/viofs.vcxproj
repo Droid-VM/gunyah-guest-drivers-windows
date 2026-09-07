@@ -110,7 +110,7 @@
       <WppEnabled>true</WppEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile. ScanConfigurationData)'  == ''">trace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
-      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories);..\shared;..\..\VirtIO;..\..\VirtIO\WDF</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories);..\shared;..\..\VirtIO;..\..\VirtIO\WDF;..\..\rdmapool</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);POOL_NX_OPTIN=1</PreprocessorDefinitions>
     </ClCompile>
     <CustomBuildStep>
@@ -140,10 +140,14 @@
     <ClCompile Include="ioctl.c" />
     <ClCompile Include="viofs.c" />
     <ClCompile Include="virtio.c" />
+    <ClCompile Include="viofs_rdma.c" />
+    <ClCompile Include="..\..\rdmapool\rdmaclient.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="trace.h" />
     <ClInclude Include="viofs.h" />
+    <ClInclude Include="viofs_rdma.h" />
+    <ClInclude Include="..\..\rdmapool\rdmaclient.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="viofs.rc" />

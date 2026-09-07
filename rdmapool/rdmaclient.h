@@ -54,6 +54,11 @@ typedef struct _RDMA_CLIENT
     PVOID BaseVA;
     PHYSICAL_ADDRESS BasePA;
     ULONG64 Size;
+    /* What the last connect attempt saw and asked for. Kept even when the attempt failed: a
+     * refused allocation is only interpretable next to the size of the pool it was refused
+     * from, and by then the connect has returned and the numbers are otherwise gone. */
+    ULONG64 LastPoolTotalSize;
+    ULONG LastRequestedPages;
 
     /* --- bounce sub-allocator (RdmaClientBounceInit) --- */
     PUCHAR EventBaseVA; /* reserved EventBytes area, or NULL */
@@ -78,6 +83,10 @@ typedef struct _RDMA_CLIENT
     PVOID CbContext;
 } RDMA_CLIENT, *PRDMA_CLIENT;
 
+/* Data-area cap used by RdmaClientConnect: 8192 pages = 32MB, sized for the
+ * storage miniports' bounce traffic. */
+#define RDMA_CLIENT_DEFAULT_DATA_PAGES 8192u
+
 /*
  * Connect to the rdmapool driver and allocate one contiguous region of
  * RingPages (the caller's vrings) + MetaPages (control slots / event area)
@@ -88,7 +97,33 @@ typedef struct _RDMA_CLIENT
  * absent, so the caller keeps the normal (KVM/QEMU) DMA path.
  */
 NTSTATUS RdmaClientConnect(PRDMA_CLIENT c, const char *Tag, ULONG RingPages, ULONG MetaPages);
+
+/*
+ * As RdmaClientConnect, but with an explicit cap on the data area instead of
+ * the storage-sized default. A driver whose device-visible working set is
+ * small -- viosnd stages a handful of period buffers, not a disk queue -- must
+ * not reserve a 32MB slice of a pool every other pVM driver shares.
+ */
+NTSTATUS RdmaClientConnectEx(PRDMA_CLIENT c, const char *Tag, ULONG RingPages, ULONG MetaPages, ULONG MaxDataPages);
 VOID RdmaClientDisconnect(PRDMA_CLIENT c);
+
+/*
+ * Piecewise use of the pool, for a driver that wants several small regions
+ * instead of one large one.
+ *
+ * The pool hands out contiguous runs of pages, so one large request can be
+ * refused while several smaller ones succeed against the same free space --
+ * and a driver that reserves its worst case up front holds pages it may never
+ * use, in a pool shared with everything else in the guest. Open once, then take
+ * a region when there is something to put in it.
+ *
+ * RdmaClientOpen does not set Active: that still means "this client holds a
+ * region", and with this interface the client may hold several or none.
+ */
+NTSTATUS RdmaClientOpen(PRDMA_CLIENT c, const char *Tag);
+NTSTATUS RdmaClientAllocRegion(PRDMA_CLIENT c, ULONG Pages, PVOID *Va, PPHYSICAL_ADDRESS Pa);
+VOID RdmaClientFreeRegion(PRDMA_CLIENT c, PVOID Va, ULONG Pages);
+VOID RdmaClientClose(PRDMA_CLIENT c);
 
 /* VA<->PA within the contiguous rdmapool region. */
 PHYSICAL_ADDRESS RdmaClientVAtoPA(PRDMA_CLIENT c, PVOID va);
