@@ -249,6 +249,10 @@ VirtIoFindAdapter(IN PVOID DeviceExtension,
     ULONG max_queues;
     ULONG Size;
     ULONG HeapSize;
+    ULONG max_data_segments;
+    ULONG target_queue_depth;
+    ULONG ring_desc_budget;
+    ULONG segments_per_request;
 
     PVOID uncachedExtensionVa;
     ULONG extensionSize;
@@ -403,13 +407,38 @@ VirtIoFindAdapter(IN PVOID DeviceExtension,
         adaptExt->indirect = CHECKBIT(adaptExt->features, VIRTIO_RING_F_INDIRECT_DESC);
     }
 
-    if (adaptExt->dump_mode)
+    /*
+     * Segment count and queue depth come out of one budget: the virtqueue.
+     *
+     * Without VIRTIO_RING_F_INDIRECT_DESC an outstanding request occupies its
+     * entire descriptor chain in the split ring -- out_hdr + status + one
+     * descriptor per data segment. Deriving the advertised segment count and
+     * the device queue depth independently lets their product exceed the ring:
+     * a worst-case (fully fragmented) SG list then makes virtqueue_add_buf fail
+     * with -ENOSPC as soon as a second request is queued. The failure is not
+     * graceful -- the SRB comes back as SRB_STATUS_BUSY and the adapter is
+     * paused until the StorPort watchdog fires -- so sequential throughput
+     * collapses to a few MB/s. It is intermittent because it depends on how
+     * fragmented the SG list of any given transfer happens to be.
+     *
+     * With indirect descriptors a request costs one ring descriptor (its chain
+     * lives in a separate table), so only the device's own seg_max applies.
+     */
+    max_data_segments = adaptExt->dump_mode ? SCSI_MINIMUM_PHYSICAL_BREAKS : MAX_PHYS_SEGMENTS;
+
+    /* Never advertise more segments than the device accepts in one chain. This
+     * clamp applies to both descriptor modes. */
+    if (CHECKBIT(adaptExt->features, VIRTIO_BLK_F_SEG_MAX))
     {
-        ConfigInfo->NumberOfPhysicalBreaks = SCSI_MINIMUM_PHYSICAL_BREAKS;
-    }
-    else
-    {
-        ConfigInfo->NumberOfPhysicalBreaks = MAX_PHYS_SEGMENTS;
+        ULONG size_max = adaptExt->info.size_max;
+        ULONG seg_max = adaptExt->info.seg_max;
+        if ((size_max > 0) && (seg_max > 0))
+        {
+            /* A size_max that is not a multiple of PAGE_SIZE splits a page-sized
+             * segment across two descriptors; scale the usable count down. */
+            seg_max = (ULONG)((ULONGLONG)seg_max * size_max) / (ROUND_TO_PAGES(size_max));
+            max_data_segments = min(max_data_segments, (seg_max > 1) ? (seg_max - 1) : 1);
+        }
     }
 
     if (adaptExt->indirect)
@@ -418,20 +447,24 @@ VirtIoFindAdapter(IN PVOID DeviceExtension,
     }
     else
     {
-        ConfigInfo->NumberOfPhysicalBreaks = max(SCSI_MINIMUM_PHYSICAL_BREAKS, (queueLength / 4));
-        adaptExt->queue_depth = max(((queueLength / ConfigInfo->NumberOfPhysicalBreaks) - 1), 1);
-    }
-    if (CHECKBIT(adaptExt->features, VIRTIO_BLK_F_SEG_MAX))
-    {
-        ULONG size_max = adaptExt->info.size_max;
-        ULONG seg_max = adaptExt->info.seg_max;
-        if ((size_max > 0) && (seg_max > 0))
-        {
-            seg_max = (ULONG)((ULONGLONG)seg_max * size_max) / (ROUND_TO_PAGES(size_max));
-            ConfigInfo->NumberOfPhysicalBreaks = seg_max - 1;
-        }
+        /* Keep the historical target depth (three requests for a 256-entry
+         * ring), then divide the usable ring between that many whole chains. */
+        target_queue_depth = max(SCSI_MINIMUM_PHYSICAL_BREAKS, (queueLength / 4));
+        target_queue_depth = (queueLength > target_queue_depth) ? ((queueLength / target_queue_depth) - 1) : 1;
+        target_queue_depth = max(target_queue_depth, 1);
+
+        ring_desc_budget = (queueLength > VIRTIO_BLK_CTRL_DESC_RESERVE) ? (queueLength - VIRTIO_BLK_CTRL_DESC_RESERVE)
+                                                                        : 1;
+        segments_per_request = ring_desc_budget / target_queue_depth;
+        segments_per_request = (segments_per_request > VIRTIO_BLK_REQ_DESC_OVERHEAD) ? (segments_per_request -
+                                                                                        VIRTIO_BLK_REQ_DESC_OVERHEAD)
+                                                                                     : 1;
+
+        max_data_segments = min(max_data_segments, segments_per_request);
+        adaptExt->queue_depth = max((ring_desc_budget / (max_data_segments + VIRTIO_BLK_REQ_DESC_OVERHEAD)), 1);
     }
 
+    ConfigInfo->NumberOfPhysicalBreaks = max_data_segments;
     ConfigInfo->MaximumTransferLength = ConfigInfo->NumberOfPhysicalBreaks * PAGE_SIZE;
     ConfigInfo->NumberOfPhysicalBreaks++;
     adaptExt->max_tx_length = ConfigInfo->MaximumTransferLength;
