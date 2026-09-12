@@ -96,6 +96,15 @@ typedef struct VirtIOBufferDescriptor VIO_SG, *PVIO_SG;
 #define MAX_PHYS_SEGMENTS                  512
 #define VIRTIO_MAX_SG                      (3 + MAX_PHYS_SEGMENTS)
 
+/* Every virtio-blk request carries an out_hdr and a status descriptor on top of
+ * its data segments. Without VIRTIO_RING_F_INDIRECT_DESC the whole chain sits in
+ * the split ring, so this is what each outstanding request costs beyond its
+ * data. */
+#define VIRTIO_BLK_REQ_DESC_OVERHEAD       2
+/* Descriptors held back from the read/write budget so a control request (flush,
+ * get id, discard) still fits when the data path has taken its full share. */
+#define VIRTIO_BLK_CTRL_DESC_RESERVE       3
+
 #define VIOBLK_POOL_TAG                    'BoiV'
 
 #pragma pack(1)

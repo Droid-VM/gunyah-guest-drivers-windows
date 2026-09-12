@@ -82,6 +82,20 @@ static ULONG GetSrbQueueNumber(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
     return QueueNumber;
 }
 
+/*
+ * The ring had no room for this request's descriptor chain. Pause the adapter
+ * until a number of completions that can actually occur: a fully fragmented
+ * chain can occupy nearly the whole ring on its own, so there may be a single
+ * request in flight. Asking StorPort for two completions in that state leaves
+ * the adapter paused until its watchdog fires (~250ms) rather than until the
+ * next completion, which is what turns a transient full ring into a throughput
+ * collapse.
+ */
+static VOID VioStorPauseOnFullRing(IN PVOID DeviceExtension, IN ULONG inflight)
+{
+    StorPortBusy(DeviceExtension, (inflight > 1) ? 2 : 1);
+}
+
 BOOLEAN
 RhelDoFlush(PVOID DeviceExtension, PSRB_TYPE Srb, BOOLEAN resend, BOOLEAN bIsr)
 {
@@ -189,12 +203,13 @@ RhelDoFlush(PVOID DeviceExtension, PSRB_TYPE Srb, BOOLEAN resend, BOOLEAN bIsr)
     }
     else
     {
+        ULONG inflight = element->srb_cnt;
         if (!resend)
         {
             VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
         }
         RhelDbgPrint(TRACE_LEVEL_ERROR, " Can not add packet to queue %d.\n", QueueNumber);
-        StorPortBusy(DeviceExtension, 2);
+        VioStorPauseOnFullRing(DeviceExtension, inflight);
     }
     if (notify)
     {
@@ -267,9 +282,10 @@ RhelDoReadWrite(PVOID DeviceExtension, PSRB_TYPE Srb)
     }
     else
     {
+        ULONG inflight = element->srb_cnt;
         VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
         RhelDbgPrint(TRACE_LEVEL_ERROR, " Can not add packet to queue %d.\n", QueueNumber);
-        StorPortBusy(DeviceExtension, 2);
+        VioStorPauseOnFullRing(DeviceExtension, inflight);
     }
     if (notify)
     {
@@ -456,6 +472,7 @@ RhelDoUnMap(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
     }
     else
     {
+        ULONG inflight = element->srb_cnt;
         VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
         if (srbExt->bounceCtl != NULL)
         {
@@ -463,7 +480,7 @@ RhelDoUnMap(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
             srbExt->bounceCtl = NULL;
         }
         RhelDbgPrint(TRACE_LEVEL_ERROR, " Can not add packet to queue %d.\n", QueueNumber);
-        StorPortBusy(DeviceExtension, 2);
+        VioStorPauseOnFullRing(DeviceExtension, inflight);
     }
     if (notify)
     {
@@ -570,9 +587,10 @@ RhelGetSerialNumber(IN PVOID DeviceExtension, IN PSRB_TYPE Srb)
     }
     else
     {
+        ULONG inflight = element->srb_cnt;
         VioStorVQUnlock(DeviceExtension, MessageId, &LockHandle, FALSE);
         RhelDbgPrint(TRACE_LEVEL_ERROR, " Can not add packet to queue %d.\n", QueueNumber);
-        StorPortBusy(DeviceExtension, 2);
+        VioStorPauseOnFullRing(DeviceExtension, inflight);
     }
     if (notify)
     {
