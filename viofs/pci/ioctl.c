@@ -15,16 +15,15 @@
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+ * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+ * OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "viofs.h"
@@ -504,22 +503,29 @@ static VOID HandleFuseRead(IN PDEVICE_CONTEXT Context,
         goto complete_wdf_req_no_fs_req;
     }
 
-    PVOID originalBuffer = (PVOID)(ULONG_PTR)((struct fuse_out_for_read *)out_buf)->original_pointer;
-    ULONG originalBufferLen = ((struct fuse_out_for_read *)out_buf)->hdr.len;
     ULONG outHeaderLength = sizeof(((struct fuse_out_for_read *)out_buf)->hdr);
+
+    /*
+     * The caller's read buffer is probed and locked by VirtFsEvtIoInCallerContext
+     * in the requestor's process context before this request is queued. Do not
+     * probe/lock the raw user pointer here: the sequential queue can dispatch
+     * after a completion DPC has changed the current thread/process context.
+     */
+    WDFMEMORY userMem = GetReadRequestContext(Request)->LockedReadBuffer;
+    size_t lockedLen = 0;
+    if (userMem == NULL)
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL, "Read buffer was not locked in the caller's context");
+        status = STATUS_INVALID_DEVICE_STATE;
+        goto complete_wdf_req;
+    }
+    WdfMemoryGetBuffer(userMem, &lockedLen);
+    ULONG originalBufferLen = (ULONG)lockedLen;
 
     TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "read length %d", originalBufferLen);
 
     fs_req->Request = Request;
     fs_req->Cancellable = FALSE;
-
-    WDFMEMORY userMem;
-    status = WdfRequestProbeAndLockUserBufferForWrite(Request, originalBuffer, originalBufferLen, &userMem);
-    if (!NT_SUCCESS(status))
-    {
-        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL, "WdfRequestProbeAndLockUserBufferForWrite failed");
-        goto complete_wdf_req;
-    }
 
     PMDL firstMdl = IoAllocateMdl(out_buf, outHeaderLength, FALSE, FALSE, NULL);
     if (!firstMdl)
@@ -560,10 +566,17 @@ static VOID HandleFuseRead(IN PDEVICE_CONTEXT Context,
     hiprio = FALSE;
 
     status = VirtFsEnqueueRequest(Context, fs_req, hiprio);
-    if (NT_SUCCESS(status))
+    if (!NT_SUCCESS(status))
     {
-        return;
+        /*
+         * Match the DMA-path failure handling used by HandleSubmitFuseRequest.
+         * For the Gunyah restricted-pool path, VirtFsEnqueueRequest may already
+         * have dequeued/released a failed staged request; FailFsRequest also
+         * safely clears the request/bounce state and owns final completion.
+         */
+        FailFsRequest(Context, fs_req);
     }
+    return;
 
 complete_wdf_req:
     FreeVirtFsRequest(fs_req);
@@ -571,6 +584,90 @@ complete_wdf_req:
 complete_wdf_req_no_fs_req:
     TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "Complete Request: %p Status: %!STATUS!", Request, status);
     WdfRequestComplete(Request, status);
+}
+
+/*
+ * Runs in the requestor's process context, at PASSIVE_LEVEL, before an IOCTL is
+ * queued. IOCTL_VIRTFS_FUSE_REQUEST_READ carries a raw user-mode read pointer in
+ * fuse_out_for_read.original_pointer; it must be probed and locked here rather
+ * than from the sequential queue's completion-DPC context.
+ */
+VOID VirtFsEvtIoInCallerContext(IN WDFDEVICE Device, IN WDFREQUEST Request)
+{
+    NTSTATUS status;
+    WDF_REQUEST_PARAMETERS params;
+    struct fuse_out_for_read *out_buf;
+    PVOID originalBuffer;
+    ULONG originalBufferLen;
+    WDFMEMORY userMem;
+    PVOID in_buf;
+    size_t inLen;
+    SIZE_T inPages;
+    SIZE_T hdrPages;
+    SIZE_T readPages;
+
+    WDF_REQUEST_PARAMETERS_INIT(&params);
+    WdfRequestGetParameters(Request, &params);
+
+    if (params.Type == WdfRequestTypeDeviceControl &&
+        params.Parameters.DeviceIoControl.IoControlCode == IOCTL_VIRTFS_FUSE_REQUEST_READ)
+    {
+        status = WdfRequestRetrieveOutputBuffer(Request, sizeof(*out_buf), &out_buf, NULL);
+        if (!NT_SUCCESS(status))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL, "WdfRequestRetrieveOutputBuffer failed: %!STATUS!", status);
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        originalBuffer = (PVOID)(ULONG_PTR)out_buf->original_pointer;
+        originalBufferLen = out_buf->hdr.len;
+
+        /*
+         * Both hdr.len and original_pointer are supplied by the caller. Reject
+         * invalid requests and requests that exceed the DMA scatter/gather page
+         * limit before locking user memory.
+         */
+        status = WdfRequestRetrieveInputBuffer(Request, sizeof(struct fuse_in_header), &in_buf, &inLen);
+        if (!NT_SUCCESS(status))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL, "WdfRequestRetrieveInputBuffer failed: %!STATUS!", status);
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        inPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(in_buf, inLen);
+        hdrPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(out_buf, sizeof(out_buf->hdr));
+        readPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(originalBuffer, originalBufferLen);
+        if (originalBuffer == NULL || originalBufferLen == 0 ||
+            inPages + hdrPages + readPages > VIRT_FS_MAX_QUEUE_SIZE)
+        {
+            TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL, "Invalid zero-copy read buffer");
+            WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+            return;
+        }
+
+        status = WdfRequestProbeAndLockUserBufferForWrite(Request, originalBuffer, originalBufferLen, &userMem);
+        if (!NT_SUCCESS(status))
+        {
+            TraceEvents(TRACE_LEVEL_ERROR,
+                        DBG_IOCTL,
+                        "WdfRequestProbeAndLockUserBufferForWrite failed: %!STATUS!",
+                        status);
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        /* WDF makes this memory object a child of Request and releases it on completion. */
+        GetReadRequestContext(Request)->LockedReadBuffer = userMem;
+    }
+
+    status = WdfDeviceEnqueueRequest(Device, Request);
+    if (!NT_SUCCESS(status))
+    {
+        TraceEvents(TRACE_LEVEL_ERROR, DBG_IOCTL, "WdfDeviceEnqueueRequest failed: %!STATUS!", status);
+        WdfRequestComplete(Request, status);
+    }
 }
 
 void CopyBuffer(void *_Dst, void const *_Src, size_t _Size)
